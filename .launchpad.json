@@ -1,0 +1,9 @@
+{
+  "targets": {
+    "dist": {
+      "id": "synonance-mszppces",
+      "name": "synonance",
+      "host": "https://launchpad.standardcas.org/api"
+    }
+  }
+}

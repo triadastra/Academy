@@ -1,0 +1,29 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "synonance",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 3000
+    },
+    {
+      "name": "synonance-dist",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "preview", "--port", "4310", "--strictPort"],
+      "port": 4310
+    },
+    {
+      "name": "synonance-alt",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "--port", "4321", "--strictPort"],
+      "port": 4321
+    },
+    {
+      "name": "synonance-forge",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "--port", "4333", "--strictPort"],
+      "port": 4333
+    }
+  ]
+}

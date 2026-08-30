@@ -1,0 +1,19 @@
+{
+  "root": ".",
+  "mode": "production",
+  "runtime": "static",
+  "packageManager": "npm",
+  "installCommand": "npm ci",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "spaFallback": true,
+  "healthPath": "/",
+  "ignore": [
+    "content",
+    "build",
+    "output",
+    "sources",
+    "dist",
+    "node_modules"
+  ]
+}

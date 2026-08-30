@@ -1,0 +1,16 @@
+node_modules
+dist
+.DS_Store
+.claude/
+content/notes/
+
+# Secrets — MOONSHOT_API_KEY lives here. Never commit.
+.env
+.env.local
+.env.*.local
+
+# Generated artifacts and caches
+output/
+tmp/
+__pycache__/
+scripts/.lesson-cache.json
