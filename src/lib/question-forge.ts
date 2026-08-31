@@ -550,6 +550,18 @@ export async function synthesizeQuestions(options: ForgeOptions): Promise<ForgeR
   const { session, trigger = 'manual', status = 'draft', signal, onProgress } = options
   const empty: ForgeResult = { batch: null, questions: [], rejected: [], noteCodes: [] }
 
+  // A gateway that goes unavailable mid-run is a signal every other note's
+  // request should stop too, not just the one that noticed — otherwise the
+  // sibling requests keep streaming (and keep billing) against a run whose
+  // result is already being thrown away. `controller` is the run's own signal,
+  // aborted the moment any request sees GatewayUnavailable; it also mirrors
+  // whatever signal the caller passed in, so either source stops every request.
+  const controller = new AbortController()
+  if (signal) {
+    if (signal.aborted) controller.abort()
+    else signal.addEventListener('abort', () => controller.abort(), { once: true })
+  }
+
   const ready = sessionReady(session)
   if (!ready.ok) return { ...empty, error: ready.reason }
 
@@ -728,7 +740,7 @@ export async function synthesizeQuestions(options: ForgeOptions): Promise<ForgeR
         // questions — and the streaming scanner below means exceeding it
         // costs the question being written rather than all of them.
         maxTokens: 12000,
-        signal,
+        signal: controller.signal,
         onReasoning: (_delta, full) => {
           // Four characters to the token is the usual rough conversion; this
           // is a liveness indicator, not a billing figure.
@@ -752,7 +764,12 @@ export async function synthesizeQuestions(options: ForgeOptions): Promise<ForgeR
       })
     } catch (error) {
       if ((error as Error)?.name === 'AbortError') return
-      if (error instanceof GatewayUnavailable) throw error
+      if (error instanceof GatewayUnavailable) {
+        // Stop every other in-flight and not-yet-started request in this run:
+        // the gateway is down for all of them, not just this note.
+        controller.abort()
+        throw error
+      }
       rejected.push({ prompt: planned.note.code, reason: (error as Error).message })
       return
     }
@@ -786,7 +803,7 @@ export async function synthesizeQuestions(options: ForgeOptions): Promise<ForgeR
   try {
     await mapWithLimit(requests, NOTE_CONCURRENCY, async (request) => {
       const slot = slotFor.get(request.note.code)!
-      if (signal?.aborted || accepted.length >= budget) {
+      if (controller.signal.aborted || accepted.length >= budget) {
         settle(request.note.code, slot)
         return
       }
