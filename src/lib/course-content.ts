@@ -7,7 +7,8 @@
 // the pages say so rather than borrowing another subject's syllabus.
 import { getDatabase, getCurrentUserDatabase } from '@/database/client'
 import { notesForCourse } from '@/database/notes-tools'
-import type { TopicStatus } from '@/database/types'
+import { noteCodeFor } from '@/database/question-bank'
+import type { IndexedQuestion, TopicStatus } from '@/database/types'
 
 export interface CourseTopic {
   code: string
@@ -48,6 +49,18 @@ export function topicsForCourse(courseId: string): CourseTopic[] {
   const seeded = seededKey ? database.progressTopics[seededKey] : []
   const attempts = getCurrentUserDatabase().questionAttempts
 
+  // Attempts only record the question id (see QuestionAttempt in types.ts), not
+  // the note it belongs to, so resolving "which topic was this attempt on"
+  // means looking the question up and asking `noteCodeFor` — the same rule the
+  // question bank itself uses to measure coverage. A bare substring match on
+  // the id (e.g. id.includes(note.code)) both misses every seeded question,
+  // whose ids are shaped like "hs-math-9-q01" with no note code in them, and
+  // can falsely match an unrelated id that happens to contain the same digits.
+  const questionsById = new Map<string, IndexedQuestion>()
+  for (const question of [...database.questions, ...(database.synthesizedQuestions ?? [])]) {
+    questionsById.set(question.id, question)
+  }
+
   return notesForCourse(courseId).map((note) => {
     const seed = seeded.find((topic) => topic.code === note.code)
     if (seed) {
@@ -64,7 +77,10 @@ export function topicsForCourse(courseId: string): CourseTopic[] {
 
     // No seeded progress: count this student's correct answers on the topic,
     // capped at the 5-segment scale the UI uses.
-    const forTopic = attempts.filter((attempt) => attempt.questionId.includes(note.code))
+    const forTopic = attempts.filter((attempt) => {
+      const question = questionsById.get(attempt.questionId)
+      return question ? noteCodeFor(question) === note.code : false
+    })
     const correct = forTopic.filter((attempt) => attempt.result === 'correct').length
     const mastery = Math.min(5, correct)
     return {
