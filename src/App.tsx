@@ -3,7 +3,7 @@
 // LAYOUT PATTERN: **children pattern** (react-dev.md pattern A).
 // No <Outlet/> layout: pages own their visual shells. Authentication is a
 // small per-route wrapper so refreshing a deep URL preserves the current page.
-import { useEffect, useReducer, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useReducer, useState, type ReactNode } from 'react'
 import { Navigate, Route, Routes } from 'react-router'
 import {
   canAccessTeaching,
@@ -18,39 +18,55 @@ import {
   subscribeDatabase,
 } from '@/database/client'
 import { currentLaunchpadUser } from '@/lib/launchpad-auth'
-import Login from '@/pages/Login'
-import SigninHelp from '@/pages/SigninHelp'
-import Setup from '@/pages/Setup'
-import Courses from '@/pages/Courses'
-import Chat from '@/pages/Chat'
-import ChatHistory from '@/pages/ChatHistory'
-import ChatThread from '@/pages/ChatThread'
-import Notes from '@/pages/Notes'
-import Know from '@/pages/Know'
-import QuestionBase from '@/pages/QuestionBase'
-import MockTests from '@/pages/MockTests'
-import StudyPlan from '@/pages/StudyPlan'
-import Notifications from '@/pages/Notifications'
-import Profile from '@/pages/Profile'
-import ClassPicture from '@/pages/ClassPicture'
-import Objectives from '@/pages/Objectives'
-import Deck from '@/pages/Deck'
-import Library from '@/pages/Library'
-import Upload from '@/pages/Upload'
-import TagReview from '@/pages/TagReview'
-import ItemReview from '@/pages/ItemReview'
-import PaperBuilder from '@/pages/PaperBuilder'
-import PaperPreview from '@/pages/PaperPreview'
-import CreateCourse from '@/pages/CreateCourse'
-import Policies from '@/pages/Policies'
-import Audit from '@/pages/Audit'
-import Retention from '@/pages/Retention'
-import Exports from '@/pages/Exports'
-import Security from '@/pages/Security'
-import People from '@/pages/People'
-import Announcements from '@/pages/Announcements'
+import { Spinner } from '@/components/ui/spinner'
 import StorageNotice from '@/components/StorageNotice'
 import NotificationPush from '@/components/NotificationPush'
+
+// Login is eager: it is the first thing an unauthenticated visitor sees, and
+// loading it in the main bundle avoids a network round trip before the very
+// first paint. Every other page is behind its own chunk — most sessions only
+// ever touch one role's worth of pages (student, teacher, or admin), and the
+// PDF viewer alone pulls in pdf.js, so splitting keeps that weight out of
+// everyone else's initial load.
+import Login from '@/pages/Login'
+const SigninHelp = lazy(() => import('@/pages/SigninHelp'))
+const Setup = lazy(() => import('@/pages/Setup'))
+const Courses = lazy(() => import('@/pages/Courses'))
+const Chat = lazy(() => import('@/pages/Chat'))
+const ChatHistory = lazy(() => import('@/pages/ChatHistory'))
+const ChatThread = lazy(() => import('@/pages/ChatThread'))
+const Notes = lazy(() => import('@/pages/Notes'))
+const Know = lazy(() => import('@/pages/Know'))
+const QuestionBase = lazy(() => import('@/pages/QuestionBase'))
+const MockTests = lazy(() => import('@/pages/MockTests'))
+const StudyPlan = lazy(() => import('@/pages/StudyPlan'))
+const Notifications = lazy(() => import('@/pages/Notifications'))
+const Profile = lazy(() => import('@/pages/Profile'))
+const ClassPicture = lazy(() => import('@/pages/ClassPicture'))
+const Objectives = lazy(() => import('@/pages/Objectives'))
+const Deck = lazy(() => import('@/pages/Deck'))
+const Library = lazy(() => import('@/pages/Library'))
+const Upload = lazy(() => import('@/pages/Upload'))
+const TagReview = lazy(() => import('@/pages/TagReview'))
+const ItemReview = lazy(() => import('@/pages/ItemReview'))
+const PaperBuilder = lazy(() => import('@/pages/PaperBuilder'))
+const PaperPreview = lazy(() => import('@/pages/PaperPreview'))
+const CreateCourse = lazy(() => import('@/pages/CreateCourse'))
+const Policies = lazy(() => import('@/pages/Policies'))
+const Audit = lazy(() => import('@/pages/Audit'))
+const Retention = lazy(() => import('@/pages/Retention'))
+const Exports = lazy(() => import('@/pages/Exports'))
+const Security = lazy(() => import('@/pages/Security'))
+const People = lazy(() => import('@/pages/People'))
+const Announcements = lazy(() => import('@/pages/Announcements'))
+
+function RouteFallback() {
+  return (
+    <div className="min-h-[100dvh] bg-paper flex items-center justify-center">
+      <Spinner className="size-5 text-ink-muted" />
+    </div>
+  )
+}
 
 const LAUNCHPAD_RECHECK_MS = 10 * 60 * 1000
 
@@ -196,52 +212,54 @@ export default function App() {
       {/* Same placement, same reason: a notification landing mid-session has
           to surface wherever the user happens to be. */}
       <NotificationPush />
-      <Routes>
-        <Route path="/" element={<SessionHome />} />
+      <Suspense fallback={<RouteFallback />}>
+        <Routes>
+          <Route path="/" element={<SessionHome />} />
 
-        {/* Access */}
-        <Route path="/login" element={<LoginRoute />} />
-        <Route path="/signin-help" element={<SigninHelp />} />
-        <Route path="/setup" element={protectedInstitutionPage(<Setup />)} />
+          {/* Access */}
+          <Route path="/login" element={<LoginRoute />} />
+          <Route path="/signin-help" element={<SigninHelp />} />
+          <Route path="/setup" element={protectedInstitutionPage(<Setup />)} />
 
-        {/* Student */}
-        <Route path="/courses" element={protectedInstitutionPage(<Courses />)} />
-        <Route path="/course/chat" element={protectedInstitutionPage(<Chat />)} />
-        <Route path="/course/chat/history" element={protectedInstitutionPage(<ChatHistory />)} />
-        <Route path="/course/chat/history/:threadId" element={protectedInstitutionPage(<ChatThread />)} />
-        <Route path="/course/notes" element={protectedInstitutionPage(<Notes />)} />
-        <Route path="/course/know" element={protectedInstitutionPage(<Know />)} />
-        <Route path="/course/questions" element={protectedInstitutionPage(<QuestionBase />)} />
-        <Route path="/course/mock-tests" element={protectedInstitutionPage(<MockTests />)} />
-        <Route path="/course/review" element={protectedInstitutionPage(<Navigate to="/course/questions" replace />)} />
-        <Route path="/course/plan" element={protectedInstitutionPage(<StudyPlan />)} />
-        <Route path="/notifications" element={protectedInstitutionPage(<Notifications />)} />
-        <Route path="/profile" element={protectedPage(<Profile />)} />
+          {/* Student */}
+          <Route path="/courses" element={protectedInstitutionPage(<Courses />)} />
+          <Route path="/course/chat" element={protectedInstitutionPage(<Chat />)} />
+          <Route path="/course/chat/history" element={protectedInstitutionPage(<ChatHistory />)} />
+          <Route path="/course/chat/history/:threadId" element={protectedInstitutionPage(<ChatThread />)} />
+          <Route path="/course/notes" element={protectedInstitutionPage(<Notes />)} />
+          <Route path="/course/know" element={protectedInstitutionPage(<Know />)} />
+          <Route path="/course/questions" element={protectedInstitutionPage(<QuestionBase />)} />
+          <Route path="/course/mock-tests" element={protectedInstitutionPage(<MockTests />)} />
+          <Route path="/course/review" element={protectedInstitutionPage(<Navigate to="/course/questions" replace />)} />
+          <Route path="/course/plan" element={protectedInstitutionPage(<StudyPlan />)} />
+          <Route path="/notifications" element={protectedInstitutionPage(<Notifications />)} />
+          <Route path="/profile" element={protectedPage(<Profile />)} />
 
-        {/* Teacher */}
-        <Route path="/teacher/class-picture" element={protectedTeacherPage(<ClassPicture />)} />
-        <Route path="/teacher/objectives" element={protectedTeacherPage(<Objectives />)} />
-        <Route path="/teacher/deck" element={protectedTeacherPage(<Deck />)} />
-        <Route path="/teacher/library" element={protectedTeacherPage(<Library />)} />
-        <Route path="/teacher/upload" element={protectedTeacherPage(<Upload />)} />
-        <Route path="/teacher/tag-review" element={protectedTeacherPage(<TagReview />)} />
-        <Route path="/teacher/review" element={protectedTeacherPage(<ItemReview />)} />
-        <Route path="/teacher/paper-builder" element={protectedTeacherPage(<PaperBuilder />)} />
-        <Route path="/teacher/paper-preview" element={protectedTeacherPage(<PaperPreview />)} />
-        <Route path="/teacher/create-course" element={protectedTeacherPage(<CreateCourse />)} />
-        <Route path="/teacher/policies" element={protectedTeacherPage(<Policies />)} />
+          {/* Teacher */}
+          <Route path="/teacher/class-picture" element={protectedTeacherPage(<ClassPicture />)} />
+          <Route path="/teacher/objectives" element={protectedTeacherPage(<Objectives />)} />
+          <Route path="/teacher/deck" element={protectedTeacherPage(<Deck />)} />
+          <Route path="/teacher/library" element={protectedTeacherPage(<Library />)} />
+          <Route path="/teacher/upload" element={protectedTeacherPage(<Upload />)} />
+          <Route path="/teacher/tag-review" element={protectedTeacherPage(<TagReview />)} />
+          <Route path="/teacher/review" element={protectedTeacherPage(<ItemReview />)} />
+          <Route path="/teacher/paper-builder" element={protectedTeacherPage(<PaperBuilder />)} />
+          <Route path="/teacher/paper-preview" element={protectedTeacherPage(<PaperPreview />)} />
+          <Route path="/teacher/create-course" element={protectedTeacherPage(<CreateCourse />)} />
+          <Route path="/teacher/policies" element={protectedTeacherPage(<Policies />)} />
 
-        {/* Admin */}
-        <Route path="/admin" element={protectedAdminPage(<Navigate to="/admin/audit" replace />)} />
-        <Route path="/admin/audit" element={protectedAdminPage(<Audit />)} />
-        <Route path="/admin/people" element={protectedAdminPage(<People />)} />
-        <Route path="/admin/notifications" element={protectedAdminPage(<Announcements />)} />
-        <Route path="/admin/retention" element={protectedAdminPage(<Retention />)} />
-        <Route path="/admin/exports" element={protectedAdminPage(<Exports />)} />
-        <Route path="/admin/security" element={protectedAdminPage(<Security />)} />
+          {/* Admin */}
+          <Route path="/admin" element={protectedAdminPage(<Navigate to="/admin/audit" replace />)} />
+          <Route path="/admin/audit" element={protectedAdminPage(<Audit />)} />
+          <Route path="/admin/people" element={protectedAdminPage(<People />)} />
+          <Route path="/admin/notifications" element={protectedAdminPage(<Announcements />)} />
+          <Route path="/admin/retention" element={protectedAdminPage(<Retention />)} />
+          <Route path="/admin/exports" element={protectedAdminPage(<Exports />)} />
+          <Route path="/admin/security" element={protectedAdminPage(<Security />)} />
 
-        <Route path="*" element={<SessionHome />} />
-      </Routes>
+          <Route path="*" element={<SessionHome />} />
+        </Routes>
+      </Suspense>
     </>
   )
 }
