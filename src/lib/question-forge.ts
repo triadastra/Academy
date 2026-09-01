@@ -28,7 +28,7 @@
 // has actually been getting wrong. A generated paper therefore inherits the
 // validation of its questions instead of being a fresh chance to hallucinate.
 import { chat, GatewayUnavailable, LLM_MODEL } from './llm'
-import { markAnswer } from './marking'
+import { markAnswer, parseNumeric } from './marking'
 import { getCurrentUserDatabase, getCurrentUserId } from '@/database/client'
 import { pushSystemNotification } from '@/database/notifications'
 import {
@@ -185,7 +185,11 @@ function systemPrompt(session: CourseSession): string {
   ].join('\n')
 }
 
-function userPrompt(planned: PlannedNote, existingPrompts: string[]): string {
+function userPrompt(
+  planned: PlannedNote,
+  existingPrompts: string[],
+  feedback: string[] = [],
+): string {
   const existing = existingPrompts.slice(0, 20)
   return [
     `Note ${planned.note.code} — ${planned.note.title}`,
@@ -198,6 +202,14 @@ function userPrompt(planned: PlannedNote, existingPrompts: string[]): string {
     existing.length
       ? `Questions that already exist for this topic — write about something else:\n${existing.map((prompt) => `· ${prompt}`).join('\n')}`
       : 'Nothing exists for this topic yet.',
+    // On a retry the model is told exactly why its last drafts were thrown
+    // away, so it fixes the fault instead of repeating it. See writeNote.
+    ...(feedback.length
+      ? [
+          '',
+          `Your previous attempt at this note was rejected. Fix these faults and do not repeat them:\n${feedback.map((reason) => `· ${reason}`).join('\n')}`,
+        ]
+      : []),
   ].join('\n')
 }
 
@@ -375,6 +387,12 @@ function stringList(value: unknown): string[] {
 const LEAKED_CONTEXT =
   /\b(the note|the passage above|the text (above|provided|below)|the excerpt|according to the (note|guide)|as an ai)\b/i
 
+/** Multiple-choice options a student can eliminate without knowing anything. */
+const FILLER_OPTION = /^(all|none|both|neither|all of these|none of these)( of the above)?[.!]?$/
+
+/** Loosest tolerance a numeric accept rule may carry: five per cent. */
+const MAX_NUMERIC_TOLERANCE = 0.05
+
 interface DraftValidation {
   ok: boolean
   reason?: string
@@ -440,6 +458,20 @@ export function validateDraft(
     if (options.length < 3 || ids.size !== options.length) {
       return { ok: false, reason: 'needs at least three distinctly labelled options' }
     }
+    // The labels being distinct is not enough: two options with the same TEXT
+    // ("2" and "2.0", or the same phrase re-cased) make the question
+    // unanswerable even when the key is unambiguous.
+    const texts = options.map((option) =>
+      option.text.replace(/\s+/g, ' ').trim().toLowerCase().replace(/[.,;:!?]$/, ''),
+    )
+    if (new Set(texts).size !== texts.length) {
+      return { ok: false, reason: 'two options say the same thing' }
+    }
+    // Filler options are eliminable without knowing anything, so they mark
+    // the test taker's elimination skill rather than the course material.
+    if (texts.some((optionText) => FILLER_OPTION.test(optionText))) {
+      return { ok: false, reason: 'has a filler option ("all/none of the above")' }
+    }
     const correct = text(draft.correctOption).toUpperCase()
     if (!ids.has(correct)) return { ok: false, reason: 'correct option is not one of the options' }
     answerRule = { mode: 'choice', values: [correct] }
@@ -462,11 +494,27 @@ export function validateDraft(
       return { ok: false, reason: 'accept terms are whole sentences rather than key fragments' }
     }
     const tolerance = typeof accept.tolerance === 'number' ? accept.tolerance : undefined
+    const acceptMode =
+      mode === 'numeric' || mode === 'equalsAny' || mode === 'includesAll'
+        ? (mode as AnswerRule['mode'])
+        : 'includesAll'
+    if (acceptMode === 'numeric') {
+      // A numeric rule whose values are not numbers can never match: the
+      // marker parses both sides and falls back to exact string equality,
+      // which a student typing the right number in a different form then
+      // fails. (Fractions like "2/3" DO parse — see marking.parseNumeric.)
+      if (!values.some((value) => parseNumeric(value) !== null)) {
+        return { ok: false, reason: 'numeric accept rule has no numeric value' }
+      }
+      // A wide tolerance marks wrong answers right; near-zero expected values
+      // already get absolute tolerance from the marker, so there is no
+      // legitimate reason to loosen beyond five per cent.
+      if (tolerance !== undefined && tolerance > MAX_NUMERIC_TOLERANCE) {
+        return { ok: false, reason: 'numeric tolerance wider than 5% marks wrong answers right' }
+      }
+    }
     answerRule = {
-      mode:
-        mode === 'numeric' || mode === 'equalsAny' || mode === 'includesAll'
-          ? (mode as AnswerRule['mode'])
-          : 'includesAll',
+      mode: acceptMode,
       values,
       ...(tolerance !== undefined && tolerance >= 0 ? { tolerance } : {}),
     }
@@ -670,12 +718,23 @@ export async function synthesizeQuestions(options: ForgeOptions): Promise<ForgeR
    * makes a truncated reply useful — see `scanCompleteObjects`. It also means
    * the sheet fills in question by question instead of jumping from a spinner
    * to a finished list.
+   *
+   * A note whose drafts fail validation gets ONE retry, with the rejection
+   * reasons handed back to the model. Without it the failure mode was a note
+   * silently producing nothing: every draft discarded, the batch smaller than
+   * planned, and nobody told why. Most rejections are systematic (the model
+   * wrote sentence-long accept terms, or mislabelled its own correct option),
+   * so the same fault repeated across every draft of the note — and a model
+   * told what it did wrong usually stops doing it.
    */
   const writeNote = async (planned: PlannedNote, slot: NoteProgress) => {
     let written = 0
-    // Prompts this request has already ruled on, kept so the whole-document
-    // sweep after the stream does not re-judge — and re-report — a draft the
-    // scanner already rejected. Without it every rejection was listed twice.
+    // Rejection reasons from this note, fed back to the model on a retry.
+    const noteRejections: string[] = []
+    // Prompts this note's requests have already ruled on, kept so the
+    // whole-document sweep after a stream — and the retry pass — does not
+    // re-judge, and re-report, a draft already decided. Without it every
+    // rejection was listed twice.
     const decided = new Set<string>()
 
     const takeDraft = (draft: unknown) => {
@@ -695,10 +754,9 @@ export async function synthesizeQuestions(options: ForgeOptions): Promise<ForgeR
         existingPrompts: seen,
       })
       if (!result.ok || !result.question) {
-        rejected.push({
-          prompt: promptText || planned.note.code,
-          reason: result.reason ?? 'failed validation',
-        })
+        const reason = result.reason ?? 'failed validation'
+        rejected.push({ prompt: promptText || planned.note.code, reason })
+        noteRejections.push(reason)
         return
       }
       if (trigger === 'agent') result.question.provenance!.trigger = 'agent'
@@ -710,83 +768,118 @@ export async function synthesizeQuestions(options: ForgeOptions): Promise<ForgeR
       report('running', `${planned.note.code} — ${slot.written} of ${slot.wanted} written`)
     }
 
-    slot.phase = 'thinking'
-    report('running', `Reading ${planned.note.code} ${planned.note.title} — ${planned.reason}`)
+    /**
+     * One call against this note: stream, validate as objects land, then
+     * sweep whatever the scanner could not walk. `asking` is how many
+     * questions this call is for — the full plan on the first attempt, only
+     * what is still missing on a retry.
+     */
+    const attempt = async (asking: PlannedNote, feedback: string[]): Promise<'ok' | 'aborted'> => {
+      slot.phase = 'thinking'
+      report(
+        'running',
+        feedback.length
+          ? `Retrying ${planned.note.code} — told the model what it got wrong`
+          : `Reading ${planned.note.code} ${planned.note.title} — ${planned.reason}`,
+      )
 
-    let reply = ''
-    let cursor = 0
-    const seenObjects = new Set<string>()
-    // The reasoning stream arrives in ~1,900 chunks. Reporting each one would
-    // re-render the sheet 1,900 times to move a counter; a quarter-second is
-    // often enough to read as live and cheap enough to ignore.
-    let lastTick = 0
-    try {
-      reply = await chat({
-        messages: [
-          { role: 'system', content: systemPrompt(session) },
-          {
-            // Only the prompts already written on THIS note are worth
-            // spending context on: the model is being asked what else there
-            // is to ask about this note, not about the whole course.
-            role: 'user',
-            content: userPrompt(planned, promptsByNote.get(planned.note.code) ?? []),
+      let reply = ''
+      let cursor = 0
+      const seenObjects = new Set<string>()
+      // The reasoning stream arrives in ~1,900 chunks. Reporting each one would
+      // re-render the sheet 1,900 times to move a counter; a quarter-second is
+      // often enough to read as live and cheap enough to ignore.
+      let lastTick = 0
+      try {
+        reply = await chat({
+          messages: [
+            { role: 'system', content: systemPrompt(session) },
+            {
+              // Only the prompts already written on THIS note are worth
+              // spending context on: the model is being asked what else there
+              // is to ask about this note, not about the whole course.
+              role: 'user',
+              content: userPrompt(asking, promptsByNote.get(planned.note.code) ?? [], feedback),
+            },
+          ],
+          // Reasoning is billed as output and dominates on this model: the
+          // first live run of this pipeline spent a 4,200-token budget almost
+          // entirely on thinking and returned a JSON array cut off mid-question.
+          // Measured since, this model spends 3,000–5,000 tokens thinking before
+          // it writes anything, so the budget has to cover that AND the
+          // questions — and the streaming scanner below means exceeding it
+          // costs the question being written rather than all of them.
+          maxTokens: 12000,
+          signal: controller.signal,
+          onReasoning: (_delta, full) => {
+            // Four characters to the token is the usual rough conversion; this
+            // is a liveness indicator, not a billing figure.
+            slot.thinking = Math.round(full.length / 4)
+            const now = Date.now()
+            if (now - lastTick < 250) return
+            lastTick = now
+            report('running', `Reading ${planned.note.code} ${planned.note.title}`)
           },
-        ],
-        // Reasoning is billed as output and dominates on this model: the
-        // first live run of this pipeline spent a 4,200-token budget almost
-        // entirely on thinking and returned a JSON array cut off mid-question.
-        // Measured since, this model spends 3,000–5,000 tokens thinking before
-        // it writes anything, so the budget has to cover that AND the
-        // questions — and the streaming scanner below means exceeding it
-        // costs the question being written rather than all of them.
-        maxTokens: 12000,
-        signal: controller.signal,
-        onReasoning: (_delta, full) => {
-          // Four characters to the token is the usual rough conversion; this
-          // is a liveness indicator, not a billing figure.
-          slot.thinking = Math.round(full.length / 4)
-          const now = Date.now()
-          if (now - lastTick < 250) return
-          lastTick = now
-          report('running', `Reading ${planned.note.code} ${planned.note.title}`)
-        },
-        onToken: (_delta, full) => {
-          if (slot.phase === 'thinking') slot.phase = 'writing'
-          const { objects, next } = scanCompleteObjects(full, cursor)
-          cursor = next
-          for (const object of objects) {
-            if (seenObjects.has(object)) continue
-            seenObjects.add(object)
-            const parsed = parseScanned(object)
-            if (parsed) takeDraft(parsed)
-          }
-        },
-      })
-    } catch (error) {
-      if ((error as Error)?.name === 'AbortError') return
-      if (error instanceof GatewayUnavailable) {
-        // Stop every other in-flight and not-yet-started request in this run:
-        // the gateway is down for all of them, not just this note.
-        controller.abort()
-        throw error
+          onToken: (_delta, full) => {
+            if (slot.phase === 'thinking') slot.phase = 'writing'
+            const { objects, next } = scanCompleteObjects(full, cursor)
+            cursor = next
+            for (const object of objects) {
+              if (seenObjects.has(object)) continue
+              seenObjects.add(object)
+              const parsed = parseScanned(object)
+              if (parsed) takeDraft(parsed)
+            }
+          },
+        })
+      } catch (error) {
+        if ((error as Error)?.name === 'AbortError') return 'aborted'
+        if (error instanceof GatewayUnavailable) {
+          // Stop every other in-flight and not-yet-started request in this run:
+          // the gateway is down for all of them, not just this note.
+          controller.abort()
+          throw error
+        }
+        rejected.push({ prompt: planned.note.code, reason: (error as Error).message })
+        noteRejections.push((error as Error).message)
+        return 'ok'
       }
-      rejected.push({ prompt: planned.note.code, reason: (error as Error).message })
-      return
+
+      // Whatever the stream missed — a model that answered in one chunk, or an
+      // object the scanner could not balance — is caught by a whole-document
+      // parse. Objects already taken are skipped by identity of their prompt.
+      const parsed = parseModelJson(reply) as { questions?: unknown[] } | null
+      const drafts = Array.isArray(parsed?.questions) ? parsed!.questions! : []
+      // `takeDraft` skips anything already decided, so this is a safety net for
+      // a reply the scanner could not walk — not a second pass over the same
+      // drafts.
+      for (const draft of drafts) takeDraft(draft)
+
+      if (drafts.length === 0 && seenObjects.size === 0) {
+        const reason = 'the model did not return usable JSON'
+        rejected.push({ prompt: planned.note.code, reason })
+        noteRejections.push(reason)
+      }
+      return 'ok'
     }
 
-    // Whatever the stream missed — a model that answered in one chunk, or an
-    // object the scanner could not balance — is caught by a whole-document
-    // parse. Objects already taken are skipped by identity of their prompt.
-    const parsed = parseModelJson(reply) as { questions?: unknown[] } | null
-    const drafts = Array.isArray(parsed?.questions) ? parsed!.questions! : []
-    // `takeDraft` skips anything already decided, so this is a safety net for
-    // a reply the scanner could not walk — not a second pass over the same
-    // drafts.
-    for (const draft of drafts) takeDraft(draft)
+    if ((await attempt(planned, [])) === 'aborted') return
 
-    if (written === 0 && drafts.length === 0 && seenObjects.size === 0) {
-      rejected.push({ prompt: planned.note.code, reason: 'the model did not return usable JSON' })
+    // One retry, asking only for what is still missing, with the reasons the
+    // first attempt failed. More than one retry would double the cost of a
+    // note the model clearly cannot handle; one recovers the systematic
+    // faults, which are most of them.
+    const missing = planned.wanted.length - written
+    if (
+      missing > 0 &&
+      noteRejections.length > 0 &&
+      accepted.length < budget &&
+      !controller.signal.aborted
+    ) {
+      const feedback = [...new Set(noteRejections)].slice(0, 5)
+      await attempt({ ...planned, wanted: planned.wanted.slice(written) }, feedback)
     }
+
     if (written > 0 && !noteCodes.includes(planned.note.code)) noteCodes.push(planned.note.code)
   }
 
