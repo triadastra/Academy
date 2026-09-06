@@ -321,7 +321,7 @@ export default function QuestionBase() {
           </PageAction>
         </PageBar>
 
-        <div className="flex flex-1 min-h-0 overflow-hidden">
+        <div className="practice-workspace flex flex-1 min-h-0 overflow-hidden">
           <SidePanel
             title={`${filteredQuestions.length} questions`}
             width="list"

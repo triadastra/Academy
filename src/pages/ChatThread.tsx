@@ -148,7 +148,7 @@ function Turn({
     return (
       <div id={`turn-${message.id}`} className="flex scroll-mt-6 justify-end">
         <div
-          className={`max-w-[75%] rounded-card bg-board-tint px-4 py-2.5 ${
+          className={`max-w-[90%] sm:max-w-[75%] rounded-card bg-board-tint px-4 py-2.5 ${
             matched ? 'ring-2 ring-board' : ''
           }`}
         >
@@ -714,7 +714,7 @@ export default function ChatThread() {
 
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-rule pt-4">
               <p className="font-mono text-[11px] text-ink-muted">
-                Saved in this browser · {thread.id}
+                Saved in this browser
               </p>
               <Link
                 to={`/course/chat?thread=${encodeURIComponent(thread.id)}`}

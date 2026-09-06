@@ -12,9 +12,9 @@
 // the crest block, the section chip, the 240px width and the user chip are the
 // ones CourseShell and AppShell already use, so the administrator area reads
 // as the same product as the rest of Synonance rather than a third design.
-import { useEffect, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router'
-import { Database, KeyRound, LogOut, Megaphone, ShieldCheck, Users } from 'lucide-react'
+import { Menu, X, Database, KeyRound, LogOut, Megaphone, ShieldCheck, Users } from 'lucide-react'
 import Crest from './Crest'
 import {
   getCurrentUser,
@@ -93,6 +93,8 @@ export default function AdminShell({
     }
   }, [])
 
+  const [menuOpen, setMenuOpen] = useState(false)
+
   const signOut = () => {
     signOutCurrentUser()
     navigate('/login', { replace: true })
@@ -100,8 +102,9 @@ export default function AdminShell({
 
   return (
     <div className="flex h-[100dvh] overflow-hidden bg-paper text-ink font-sans">
+      {menuOpen ? <button type="button" aria-label="Close navigation" onClick={() => setMenuOpen(false)} className="fixed inset-0 z-40 bg-ink/40 md:hidden" /> : null}
       {/* Left rail — 240px, deep chalkboard green, as in every other shell */}
-      <aside className="w-[240px] h-full min-h-0 shrink-0 flex flex-col bg-board-deep text-paper">
+      <aside onClick={() => setMenuOpen(false)} className={`${menuOpen ? 'fixed inset-y-0 left-0 z-50 flex' : 'hidden'} w-[240px] h-full min-h-0 shrink-0 flex-col bg-board-deep text-paper md:static md:flex`}>
         {/* Institution crest block */}
         <div className="flex items-start gap-3 px-5 pt-6 pb-5 border-b border-white/15">
           <Crest size={36} tone="light" />
@@ -207,7 +210,10 @@ export default function AdminShell({
 
       {/* Centre slot — the same contract CourseShell offers, so <Page> and its
           primitives drop straight in on an admin route. */}
-      <main className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">{children}</main>
+      <main className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
+        <div className="flex shrink-0 items-center gap-3 border-b border-rule bg-surface px-4 py-3 md:hidden"><button type="button" aria-label="Open administration menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)} className="rounded-control border border-rule p-2">{menuOpen ? <X size={16} /> : <Menu size={16} />}</button><span className="text-[13px] text-ink-muted">Administration</span></div>
+        {children}
+      </main>
 
       {/* Optional right drawer — 320px */}
       {right ? (

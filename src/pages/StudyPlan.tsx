@@ -125,7 +125,7 @@ export default function StudyPlan() {
   return (
     <CourseShell role="student" active="plan">
       <Page>
-        <div className="flex flex-1 min-h-0 overflow-hidden">
+        <div className="practice-workspace flex flex-1 min-h-0 overflow-hidden">
         {/* unit tree rail */}
         <SidePanel title="Units" width="index">
           <div className="px-4 py-4">

@@ -224,7 +224,7 @@ export default function Notes() {
           <ContributeNotesButton onClick={() => setContributeOpen(true)} />
         </PageBar>
 
-        <div className="flex flex-1 min-h-0 overflow-hidden">
+        <div className="practice-workspace flex flex-1 min-h-0 overflow-hidden">
         <SidePanel title="Unit notes" width="index">
           <nav className="p-4" aria-label="Unit notes">
             <ul className="flex flex-col gap-1">

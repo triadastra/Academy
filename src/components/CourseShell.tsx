@@ -27,6 +27,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
 } from 'lucide-react'
+import { useIsMobile } from '@/hooks/use-mobile'
 import { getActiveCourse } from '@/lib/course-selection'
 import {
   getCurrentUser,
@@ -95,7 +96,10 @@ export default function CourseShell({
   children: ReactNode
 }) {
   const navigate = useNavigate()
-  const [collapsed, setCollapsed] = useState(() => getSettings().courseMenuCollapsed)
+  const [desktopCollapsed, setCollapsed] = useState(() => getSettings().courseMenuCollapsed)
+  const mobile = useIsMobile()
+  const [mobileExpanded, setMobileExpanded] = useState(false)
+  const collapsed = mobile ? !mobileExpanded : desktopCollapsed
   const [activeCourse, setActiveCourseState] = useState(getActiveCourse)
   const [unread, setUnread] = useState(unreadNotificationCount)
   const nav = courseNav(role)
@@ -118,6 +122,7 @@ export default function CourseShell({
   }
 
   function toggleMenu() {
+    if (mobile) { setMobileExpanded((current) => !current); return }
     setCollapsed((current) => {
       const next = !current
       updateSettings({ courseMenuCollapsed: next })
@@ -156,10 +161,11 @@ export default function CourseShell({
   }, [])
 
   return (
-    <div className="flex h-[100dvh] overflow-hidden bg-paper text-ink">
+    <div className="academy-shell flex h-[100dvh] overflow-hidden bg-paper text-ink">
+      {mobile && mobileExpanded ? <button aria-label="Close navigation" onClick={() => setMobileExpanded(false)} className="fixed inset-0 z-40 bg-ink/40" /> : null}
       {/* Left rail — 240px, deep chalkboard green */}
       <aside
-        className={`${collapsed ? 'w-[72px]' : 'w-[240px]'} h-full min-h-0 shrink-0 flex flex-col bg-board-deep text-paper transition-[width] duration-200 ease-out`}
+        className={`${mobile && mobileExpanded ? 'fixed inset-y-0 left-0 z-50 shadow-xl' : ''} ${collapsed ? 'w-[60px] sm:w-[72px]' : 'w-[240px]'} h-full min-h-0 shrink-0 flex flex-col bg-board-deep text-paper transition-[width] duration-200 ease-out`}
       >
         {/* Institution crest block */}
         <div
@@ -293,7 +299,7 @@ export default function CourseShell({
       <main className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
         {header}
         {tabs ? (
-          <nav className="flex items-center gap-6 border-b border-rule px-8">
+          <nav className="flex items-center gap-6 overflow-x-auto whitespace-nowrap border-b border-rule px-4 sm:px-8">
             {tabs.map((t) => {
               const isActive = t.label === activeTab
               return (
@@ -318,7 +324,7 @@ export default function CourseShell({
 
       {/* Optional right drawer — 320px */}
       {right ? (
-        <aside className="w-[320px] h-full min-h-0 shrink-0 overflow-hidden border-l border-rule bg-surface">{right}</aside>
+        <aside className="w-[260px] xl:w-[320px] h-full min-h-0 shrink-0 overflow-hidden border-l border-rule bg-surface">{right}</aside>
       ) : null}
     </div>
   )

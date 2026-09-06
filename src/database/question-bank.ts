@@ -328,38 +328,46 @@ export function planForSession(
   {
     maxNotes = SYNTHESIS.maxNotesPerRun,
     maxQuestions = SYNTHESIS.maxPerRun,
-  }: { maxNotes?: number; maxQuestions?: number } = {},
+    noteCodes,
+  }: { maxNotes?: number; maxQuestions?: number; noteCodes?: string[] } = {},
 ): PlannedNote[] {
   const notes = new Map(sessionNotes(session).map((note) => [note.code, note]))
   const ranked = coverageForSession(session)
-    .filter((entry) => entry.gap > 0)
+    .filter((entry) => entry.gap > 0 && (!noteCodes || noteCodes.includes(entry.code)))
     .sort((a, b) => b.gap - a.gap || a.code.localeCompare(b.code))
     .slice(0, maxNotes)
 
-  const plan: PlannedNote[] = []
-  let budget = maxQuestions
-  for (const entry of ranked) {
+  const candidates = ranked.flatMap((entry) => {
     const note = notes.get(entry.code)
-    if (!note || budget <= 0) continue
-    const wanted: Difficulty[] = []
-    for (const difficulty of DIFFICULTIES) {
-      for (let i = 0; i < entry.want[difficulty] && wanted.length < budget; i += 1) {
-        wanted.push(difficulty)
-      }
-    }
-    const take = wanted.slice(0, budget)
-    if (take.length === 0) continue
-    budget -= take.length
+    if (!note) return []
     const missing = DIFFICULTIES.filter((difficulty) => entry.want[difficulty] > 0)
-    plan.push({
+    return [{
       note,
-      wanted: take,
-      reason:
-        entry.have.Foundation + entry.have.Standard + entry.have.Challenge === 0
-          ? 'nothing to practise on yet'
-          : `no ${missing.join(' or ').toLowerCase()} question yet`,
-    })
+      wanted: [] as Difficulty[],
+      pending: DIFFICULTIES.flatMap((difficulty) => Array<Difficulty>(entry.want[difficulty]).fill(difficulty)),
+      reason: entry.have.Foundation + entry.have.Standard + entry.have.Challenge === 0
+        ? 'nothing to practise on yet'
+        : `no ${missing.join(' or ').toLowerCase()} question yet`,
+    }]
+  })
+  // Share the budget across selected topics before adding a second question
+  // to any one topic. Selection should determine coverage, not just priority.
+  let budget = Math.max(0, Math.floor(maxQuestions))
+  while (budget > 0) {
+    let allocated = false
+    for (const candidate of candidates) {
+      if (budget <= 0) break
+      const difficulty = candidate.pending.shift()
+      if (!difficulty) continue
+      candidate.wanted.push(difficulty)
+      budget -= 1
+      allocated = true
+    }
+    if (!allocated) break
   }
+  const plan: PlannedNote[] = candidates
+    .filter((candidate) => candidate.wanted.length > 0)
+    .map(({ note, wanted, reason }) => ({ note, wanted, reason }))
   return plan
 }
 
