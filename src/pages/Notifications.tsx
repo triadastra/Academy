@@ -113,7 +113,7 @@ export default function Notifications() {
           </PageAction>
         </PageBar>
 
-        <div className="flex flex-1 min-h-0 overflow-hidden">
+        <div className="practice-workspace flex flex-1 min-h-0 overflow-hidden">
       <SidePanel
         title={filter === 'All' ? 'All notifications' : 'Unread only'}
         width="list"

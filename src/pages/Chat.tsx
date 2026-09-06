@@ -1,21 +1,20 @@
 // Chat — route /course/chat — refs syn_p7.png (active) + syn_p8.png (empty).
 // Active: thread with KaTeX working, expandable ToolChips, spec strip,
 // inline check-question that fills a mastery segment on a correct answer,
-// streaming scripted reply on send. A blank new session is the default.
+// streaming course-grounded reply on send. A blank new session is the default.
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import {
-  Globe,
   History,
   LoaderCircle,
-  Paperclip,
   Plus,
-  Send,
 } from 'lucide-react'
 import CourseShell from '@/components/CourseShell'
-import Page, { PageAction, PageBar } from '@/components/Page'
+import Page, { PageAction, PageBar, PageNotice } from '@/components/Page'
+import ChatComposer from '@/components/ChatComposer'
+import { Link } from 'react-router'
 import MarkdownText from '@/components/MarkdownText'
-import { GatewayError, LLM_MODEL, type LlmMessage } from '@/lib/llm'
+import { GatewayError, GatewayUnavailable, type LlmMessage } from '@/lib/llm'
 import { runAgent, type ToolActivity } from '@/lib/agent'
 import { notesForCourse, searchNotes } from '@/database/notes-tools'
 import { topicsForCourse } from '@/lib/course-content'
@@ -70,10 +69,6 @@ function NumberedSegments({
   )
 }
 
-// ── scripted reply for composer sends ──────────────────────────────────────
-const SCRIPTED_REPLY =
-  'Let’s work through it. Split the integrand so the algebraic factor becomes u — differentiating it lowers its degree, and the exponential or trigonometric factor is easy to integrate repeatedly.'
-
 interface DisplayMessage extends ChatMessage {
   streamed?: boolean
   /** Tools this answer was built from, kept so the student can inspect them. */
@@ -94,9 +89,8 @@ export default function Chat() {
   const [checkState, setCheckState] = useState<'idle' | 'correct' | 'wrong'>('idle')
   const [masteryFilled, setMasteryFilled] = useState(3)
   const [filledAnim, setFilledAnim] = useState<number | undefined>(undefined)
-  // True once a send has found no gateway on this origin — surfaced in the bar
-  // so a demo reply is never mistaken for a real one.
-  const [usingFallback, setUsingFallback] = useState(false)
+  // Keep failures beside the composer so the student can retry their question.
+  const [chatError, setChatError] = useState('')
   // True while the agent is reasoning or running tools, before the answer.
   const [thinking, setThinking] = useState(false)
   const [activity, setActivity] = useState<ToolActivity[]>([])
@@ -109,8 +103,8 @@ export default function Chat() {
   // literal string "YL", so every account watched Yun Lin ask its questions.
   const initials = getCurrentUser()?.initials || '··'
   const scrollRef = useRef<HTMLDivElement>(null)
+  const nearBottomRef = useRef(true)
   const abortRef = useRef<AbortController | null>(null)
-  const streamTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const threadIdRef = useRef(`thread-${uuid()}`)
   // Latest streamed text and the last time it was written to the database, so
   // an abort or a gateway failure can still persist what had arrived.
@@ -140,10 +134,6 @@ export default function Chat() {
       setActiveCourse(saved.courseId)
       setActiveCourseState(getActiveCourse())
     }
-    if (streamTimerRef.current) {
-      clearInterval(streamTimerRef.current)
-      streamTimerRef.current = null
-    }
     abortRef.current?.abort()
     abortRef.current = null
     threadIdRef.current = saved.id
@@ -168,12 +158,11 @@ export default function Chat() {
 
   // scroll to bottom on new messages
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
+    if (nearBottomRef.current) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
   }, [messages, streaming])
 
   useEffect(() => {
     return () => {
-      if (streamTimerRef.current) clearInterval(streamTimerRef.current)
       abortRef.current?.abort()
     }
   }, [])
@@ -228,7 +217,12 @@ export default function Chat() {
 
   async function send(text?: string) {
     const body = (text ?? draft).trim()
-    if (!body || streaming) return
+    if (!body || streaming || abortRef.current || body.length > 2000) return
+    setChatError('')
+    nearBottomRef.current = true
+    setActivity([])
+    const sentThreadId = threadIdRef.current
+    const sentCourseId = activeCourse.id
     if (empty) setEmpty(false)
     setDraft('')
     setStreaming(true)
@@ -248,6 +242,7 @@ export default function Chat() {
       { role: 'user', content: body },
     ]
 
+    let partial = ''
     const abort = new AbortController()
     abortRef.current = abort
 
@@ -257,20 +252,23 @@ export default function Chat() {
         messages: history,
         webSearch,
         signal: abort.signal,
-        onActivity: (entry) => setActivity((current) => [...current, entry]),
-        onReasoning: (_delta, full) =>
-          setMessages((m) => m.map((msg) => (msg.id === replyId ? { ...msg, reasoning: full } : msg))),
+        onActivity: (entry) => { if (abortRef.current === abort) setActivity((current) => [...current, entry]) },
+        onReasoning: (_delta, full) => {
+          if (abortRef.current === abort) setMessages((m) => m.map((msg) => (msg.id === replyId ? { ...msg, reasoning: full } : msg)))
+        },
         onToken: (_delta, full) => {
+          if (abortRef.current !== abort) return
           setThinking(false)
           setMessages((m) => m.map((msg) => (msg.id === replyId ? { ...msg, text: full } : msg)))
           // Checkpoint the partial answer, but not once per token: every write
           // serialises the whole database, so it goes in on a timer and the
           // final write below always lands regardless.
+          partial = full
           partialRef.current = full
           const at = Date.now()
           if (at - persistedAtRef.current > 500) {
             persistedAtRef.current = at
-            upsertChatMessage(threadIdRef.current, activeCourse.id, {
+            upsertChatMessage(sentThreadId, sentCourseId, {
               id: replyId,
               role: 'assistant',
               time: now(),
@@ -280,6 +278,7 @@ export default function Chat() {
           }
         },
       })
+      if (abortRef.current !== abort) return
       setThinking(false)
       setActivity([])
       // Keep the tool trail and the reasoning on the message, so a student can
@@ -287,10 +286,8 @@ export default function Chat() {
       setMessages((m) =>
         m.map((msg) => (msg.id === replyId ? { ...msg, text: answer, activity, reasoning } : msg)),
       )
-      setMessages((m) => m.map((msg) => (msg.id === replyId ? { ...msg, text: answer } : msg)))
       setStreaming(false)
-      abortRef.current = null
-      upsertChatMessage(threadIdRef.current, activeCourse.id, {
+      upsertChatMessage(sentThreadId, sentCourseId, {
         id: replyId,
         role: 'assistant',
         time: now(),
@@ -301,101 +298,40 @@ export default function Chat() {
       })
       return
     } catch (error) {
-      abortRef.current = null
-      if ((error as Error)?.name === 'AbortError') {
-        setStreaming(false)
-        // A stopped answer is still an answer the student saw — keep it.
-        if (partialRef.current) {
-          upsertChatMessage(threadIdRef.current, activeCourse.id, {
-            id: replyId,
-            role: 'assistant',
-            time: now(),
-            text: partialRef.current,
-            streaming: false,
-            stopped: true,
-          })
-        }
-        return
+      const stopped = (error as Error)?.name === 'AbortError'
+      // Save to the originating conversation even when navigation stopped it.
+      if (partial) {
+        upsertChatMessage(sentThreadId, sentCourseId, { id: replyId, role: 'assistant', time: now(), text: partial, streaming: false, stopped: true })
       }
-      if (error instanceof GatewayError) {
-        const retry = error.retryAfterSeconds ? ` Try again in ${error.retryAfterSeconds}s.` : ''
-        setMessages((m) =>
-          m.map((msg) =>
-            msg.id === replyId ? { ...msg, text: `Syno is unavailable: ${error.message}.${retry}` } : msg,
-          ),
-        )
-        setStreaming(false)
-        return
+      if (abortRef.current !== abort) return
+      if (!partial) setMessages((current) => current.filter((message) => message.id !== replyId))
+      if (!stopped) {
+        setChatError(error instanceof GatewayUnavailable
+          ? 'Your tutor is currently offline. Your question is saved; you can retry when the AI service is connected or continue with your course notes.'
+          : error instanceof GatewayError
+            ? `The tutor could not finish this response.${error.retryAfterSeconds ? ` Try again in ${error.retryAfterSeconds} seconds.` : ' Please try again shortly.'}`
+            : 'Something interrupted this response. Please try again.')
+        setDraft(body)
       }
-      // No gateway on this origin (dev server, or not served through
-      // Launchpad) — fall back to the demo reply so the app stays usable.
-      setUsingFallback(true)
-      playScriptedReply(replyId)
+    } finally {
+      if (abortRef.current === abort) {
+        abortRef.current = null
+        setStreaming(false)
+        setThinking(false)
+        setActivity([])
+      }
     }
-  }
-
-  /** The pre-Launchpad canned answer, kept as the offline/demo path. */
-  function playScriptedReply(replyId: string) {
-    const tokens = SCRIPTED_REPLY.split(' ')
-    let i = 0
-    const timer = setInterval(() => {
-      i += 1
-      const partial = tokens.slice(0, i).join(' ')
-      setMessages((m) =>
-        m.map((msg) => (msg.id === replyId ? { ...msg, text: partial } : msg)),
-      )
-      if (i >= tokens.length) {
-        clearInterval(timer)
-        streamTimerRef.current = null
-        setMessages((m) =>
-          m.map((msg) =>
-            msg.id === replyId
-              ? {
-                  ...msg,
-                  tools: [
-                    {
-                      tool: 'grep_corpus',
-                      arg: 'LIATE',
-                      hits: 3,
-                      lines: [
-                        'lecture_06.tex:97  \\text{LIATE: log, inverse trig, algebraic, trig, exponential}',
-                        'lecture_06.tex:143  \\text{choose } u \\text{ by LIATE order}',
-                        'worked_ex.tex:9  u = x^2 \\Rightarrow du = 2x\\,dx',
-                      ],
-                    },
-                  ],
-                  spec: {
-                    code: '2.4',
-                    filled: 3,
-                    label: 'Use integration by parts for integrals of the form ∫u dv/dx dx.',
-                    citation: 'Lecture 6 p.7',
-                  },
-                }
-              : msg,
-          ),
-        )
-        setStreaming(false)
-        appendChatMessage(threadIdRef.current, activeCourse.id, {
-          id: replyId,
-          role: 'assistant',
-          time: now(),
-          text: SCRIPTED_REPLY,
-        })
-      }
-    }, 90)
-    streamTimerRef.current = timer
   }
 
   function startNewThread() {
     // Otherwise the effect above would hand the just-cleared thread straight
     // back on the next render, and "New thread" would do nothing.
     if (resumeId) setSearchParams({}, { replace: true })
-    if (streamTimerRef.current) {
-      clearInterval(streamTimerRef.current)
-      streamTimerRef.current = null
-    }
     abortRef.current?.abort()
     abortRef.current = null
+    setThinking(false)
+    setActivity([])
+    setChatError('')
     setEmpty(true)
     threadIdRef.current = `thread-${uuid()}`
     setMessages([])
@@ -454,7 +390,7 @@ export default function Chat() {
     return (
       <CourseShell role="student" active="chat">
         <Page>
-          <PageBar context={usingFallback ? 'Demo reply · no model gateway' : LLM_MODEL}>
+          <PageBar context={`${activeCourse.code} · Course tutor`}>
             <PageAction onClick={() => navigate('/course/chat/history')}>
               <History size={14} /> History
             </PageAction>
@@ -462,36 +398,18 @@ export default function Chat() {
               <Plus size={14} /> New thread
             </PageAction>
           </PageBar>
-          <div className="flex-1 min-h-0 overflow-y-auto px-8 py-7">
+          <div className="flex-1 min-h-0 overflow-y-auto px-4 py-6 sm:px-8 sm:py-7">
             <div className="flex min-h-full flex-col items-center justify-center max-w-[820px] mx-auto w-full">
               <h2 className="font-serif text-[24px] text-ink text-center leading-tight">
                 What would you like to understand?
               </h2>
 
-            {/* centered composer */}
-            <div className="w-full mt-6 border border-rule rounded-[6px] bg-surface px-3 py-2">
-              <input
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && send()}
-                placeholder={`Ask a question about ${activeCourse.code}...`}
-                className="w-full bg-transparent outline-none text-[14px] text-ink placeholder:text-ink-muted py-1.5"
-              />
-              <div className="flex items-center gap-2 pt-1">
-                <Paperclip size={14} className="text-ink-muted" />
-                <Tex className="text-ink-muted text-[14px]">{'\\int'}</Tex>
-                <span className="ml-auto font-mono text-[12px] text-ink-muted">
-                  {draft.length} / 2000
-                </span>
-                <button
-                  type="button"
-                  onClick={() => send()}
-                  aria-label="Send"
-                  className="w-8 h-8 rounded-full bg-board text-paper flex items-center justify-center hover:bg-board-deep transition-colors duration-[120ms] ease-out"
-                >
-                  <Send size={14} />
-                </button>
-              </div>
+            <p className="mt-2 max-w-md text-center text-[14px] leading-relaxed text-ink-muted">Work through a tricky idea, practise a skill, or turn your course notes into your next study session.</p>
+            <div className="mt-6 w-full"><ChatComposer value={draft} onChange={setDraft} onSend={() => void send()} onStop={() => abortRef.current?.abort()} busy={streaming} webSearch={webSearch} onWebSearch={() => setWebSearch((on) => !on)} course={activeCourse.code} /></div>
+            <div className="mt-4 grid w-full grid-cols-1 gap-2 sm:grid-cols-3">
+              <button onClick={() => setDraft('Help me understand a topic step by step: ')} className="rounded-lg border border-rule bg-surface p-4 text-left text-[13px] text-board hover:bg-board-tint">Explain a concept <span className="mt-1 block text-[12px] text-ink-muted">Build understanding, one step at a time</span></button>
+              <Link to="/course/questions" className="rounded-lg border border-rule bg-surface p-4 text-[13px] text-board hover:bg-board-tint">Build your quiz bank <span className="mt-1 block text-[12px] text-ink-muted">Generate questions from your notes</span></Link>
+              <Link to="/course/mock-tests" className="rounded-lg border border-rule bg-surface p-4 text-[13px] text-board hover:bg-board-tint">Create a practice test <span className="mt-1 block text-[12px] text-ink-muted">Put your knowledge to the test</span></Link>
             </div>
 
             {/* Where the student left off. A blank composer is the right
@@ -536,7 +454,7 @@ export default function Chat() {
               />
 
               {/* legend */}
-              <div className="flex items-center justify-center gap-4 mt-4 text-[12px] text-ink-muted">
+              <div className="flex flex-wrap items-center justify-center gap-4 mt-4 text-[12px] text-ink-muted">
                 {['Not started', 'Emerging', 'Developing', 'Secure', 'Mastered'].map((l) => (
                   <span key={l} className="inline-flex items-center gap-1.5">
                     <span className="w-3 h-3 rounded-chip border border-rule bg-surface inline-block" />
@@ -560,7 +478,7 @@ export default function Chat() {
   return (
     <CourseShell role="student" active="chat">
       <Page>
-        <PageBar context={usingFallback ? 'Demo reply · no model gateway' : LLM_MODEL}>
+        <PageBar context={`${activeCourse.code} · Course tutor`}>
           <PageAction onClick={() => navigate('/course/chat/history')}>
             <History size={14} /> History
           </PageAction>
@@ -570,7 +488,7 @@ export default function Chat() {
         </PageBar>
 
         {/* messages */}
-        <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto px-8 py-7">
+        <div ref={scrollRef} onScroll={(event) => { const el = event.currentTarget; nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100 }} className="flex-1 min-h-0 overflow-y-auto px-4 py-6 sm:px-8 sm:py-7">
           <div className="max-w-[820px] mx-auto flex flex-col gap-5">
             {messages.map((m) =>
               m.role === 'user' ? (
@@ -581,7 +499,7 @@ export default function Chat() {
                         {initials}
                       </span>
                       <div className="flex-1">
-                        <p className="text-[14px] text-ink">{m.text}</p>
+                        <p className="whitespace-pre-wrap break-words text-[14px] text-ink">{m.text}</p>
                         <div className="text-right font-mono text-[12px] text-ink-muted mt-1">
                           {m.time}
                         </div>
@@ -766,47 +684,10 @@ export default function Chat() {
           </div>
         </div>
 
-        {/* composer */}
-        <div className="shrink-0 border-t border-rule bg-surface px-8 py-4">
-          <div className="max-w-[820px] mx-auto flex items-center gap-2 border border-rule rounded-card bg-paper px-3 py-2">
-            <input
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && send()}
-              placeholder={`Ask about ${activeCourse.code}...`}
-              className="flex-1 bg-transparent outline-none text-[14px] text-ink placeholder:text-ink-muted py-1.5"
-            />
-            <button
-              type="button"
-              onClick={() => setWebSearch((on) => !on)}
-              aria-pressed={webSearch}
-              title={
-                webSearch
-                  ? 'Web search on — costs extra tokens per search'
-                  : 'Web search off — answers come from course material only'
-              }
-              className={`inline-flex items-center gap-1.5 rounded-control px-2 py-1 text-[12px] transition-colors duration-[120ms] ease-out ${
-                webSearch ? 'bg-board-tint text-board' : 'text-ink-muted hover:text-ink'
-              }`}
-            >
-              <Globe size={14} /> Web
-            </button>
-            <button
-              type="button"
-              aria-label="Attach"
-              className="text-ink-muted hover:text-ink transition-colors duration-[120ms] ease-out"
-            >
-              <Paperclip size={16} />
-            </button>
-            <button
-              type="button"
-              onClick={() => send()}
-              aria-label="Send"
-              disabled={streaming}
-              className="w-8 h-8 rounded-control bg-board text-paper flex items-center justify-center hover:bg-board-deep transition-colors duration-[120ms] ease-out disabled:opacity-50"
-            >
-              <Send size={14} />
-            </button>
+        <div className="shrink-0 border-t border-rule bg-paper px-4 py-3 sm:px-8">
+          <div className="mx-auto max-w-[820px]">
+            {chatError ? <PageNotice className="mb-3">{chatError}</PageNotice> : null}
+            <ChatComposer value={draft} onChange={setDraft} onSend={() => void send()} onStop={() => abortRef.current?.abort()} busy={streaming} webSearch={webSearch} onWebSearch={() => setWebSearch((on) => !on)} course={activeCourse.code} />
           </div>
         </div>
       </Page>

@@ -336,7 +336,9 @@ async function mapWithLimit<T>(
       await task(items[index], index)
     }
   }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  const results = await Promise.allSettled(Array.from({ length: Math.min(limit, items.length) }, worker))
+  const failed = results.find((result) => result.status === 'rejected')
+  if (failed?.status === 'rejected') throw failed.reason
 }
 
 function words(text: string): Set<string> {
@@ -679,7 +681,7 @@ export async function synthesizeQuestions(options: ForgeOptions): Promise<ForgeR
     const decided = new Set<string>()
 
     const takeDraft = (draft: unknown) => {
-      if (accepted.length >= budget) return
+      if (controller.signal.aborted || accepted.length >= budget || written >= planned.wanted.length) return
       const promptText = text((draft as Record<string, unknown>)?.prompt)
       if (promptText && decided.has(promptText)) return
       if (promptText) decided.add(promptText)
@@ -702,6 +704,7 @@ export async function synthesizeQuestions(options: ForgeOptions): Promise<ForgeR
         return
       }
       if (trigger === 'agent') result.question.provenance!.trigger = 'agent'
+      if (!noteCodes.includes(planned.note.code)) noteCodes.push(planned.note.code)
       accepted.push(result.question)
       seen.push(result.question.prompt)
       written += 1
@@ -819,7 +822,7 @@ export async function synthesizeQuestions(options: ForgeOptions): Promise<ForgeR
       return {
         ...empty,
         error:
-          'No model gateway on this origin. Question generation needs Synonance to be served through Launchpad; it is unavailable on the dev server.',
+          'AI generation is unavailable. Connect the model service and try again; your existing question bank is still available.',
       }
     }
     return { ...empty, rejected, error: (error as Error).message }
@@ -833,7 +836,7 @@ export async function synthesizeQuestions(options: ForgeOptions): Promise<ForgeR
       error:
         rejected.length > 0
           ? `Nothing survived checking: ${rejected[0].reason}.`
-          : 'The model returned nothing usable.',
+          : signal?.aborted ? 'Generation stopped before any questions were completed.' : 'The model returned nothing usable.',
     }
   }
 
@@ -905,6 +908,9 @@ function weakNoteCodes(session: CourseSession): Map<string, number> {
  */
 export function assemblePaper(options: PaperOptions): PaperResult {
   const { session, timeMinutes = 60, questionCount = 8, targetWeakness = true } = options
+  if (!Number.isInteger(questionCount) || questionCount < 3 || !Number.isFinite(timeMinutes) || timeMinutes <= 0) {
+    return { paper: null, questions: [], error: 'Choose at least three questions and a positive time limit.' }
+  }
   const ready = sessionReady(session)
   if (!ready.ok) return { paper: null, questions: [], error: ready.reason }
 
@@ -919,6 +925,8 @@ export function assemblePaper(options: PaperOptions): PaperResult {
       error: `${session.label} has ${pool.length} question${pool.length === 1 ? '' : 's'} to draw on. Generate questions first — a paper is assembled from the bank, never invented.`,
     }
   }
+
+  if (questionCount > pool.length) return { paper: null, questions: [], error: `Only ${pool.length} questions are available. Reduce the test length or add questions to your bank.` }
 
   const weakness = targetWeakness ? weakNoteCodes(session) : new Map<string, number>()
   const byNote = new Map<string, IndexedQuestion[]>()

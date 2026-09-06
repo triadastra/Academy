@@ -149,7 +149,7 @@ export default function MockTests() {
             <Sparkles size={15} /> Assemble a paper
           </PageAction>
         </PageBar>
-        <div className="flex flex-1 min-h-0 overflow-hidden">
+        <div className="practice-workspace flex flex-1 min-h-0 overflow-hidden">
           <SidePanel title={`${session.label} papers`} width="index">
             <ul>
               {papers.map((paper) => {

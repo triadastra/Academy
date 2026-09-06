@@ -68,7 +68,7 @@ MOONSHOT_API_KEY=your_key_here
 
 The key is read by the Vite development server and is not bundled into client code. Never rename it to `VITE_MOONSHOT_API_KEY`, because Vite exposes `VITE_*` values to the browser.
 
-Without a key, the AI endpoint is disabled and chat falls back to scripted demo responses. Production deployments expect the host platform to provide `/__lp_llm_proxy`.
+Without a key, the AI endpoint is disabled and chat shows an offline message and preserves your question for retry. Production deployments expect the host platform to provide `/__lp_llm_proxy`.
 
 ## Commands
 
@@ -77,6 +77,7 @@ Without a key, the AI endpoint is disabled and chat falls back to scripted demo 
 | `npm run dev` | Start the development server on port 3000 |
 | `npm run build` | Type-check and create a production build in `dist/` |
 | `npm run lint` | Run ESLint across the project |
+| `npm run test:generation` | Verify topic planning, draft review, cancellation, and test assembly |
 | `npm run preview` | Preview the production build locally |
 
 ## Project structure

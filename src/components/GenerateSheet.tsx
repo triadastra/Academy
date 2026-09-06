@@ -26,6 +26,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
+import * as Dialog from '@radix-ui/react-dialog'
 import { PageAction, PageNotice } from '@/components/Page'
 import OriginTag from '@/components/OriginTag'
 import Tex from '@/components/Tex'
@@ -37,6 +38,7 @@ import {
   discardBatch,
   planForSession,
   questionsForSession,
+  noteCodeFor,
   sessionQuota,
   sessionReady,
   type CourseSession,
@@ -73,52 +75,24 @@ function Shell({
   children: React.ReactNode
   footer?: React.ReactNode
 }) {
-  const dialogRef = useRef<HTMLElement>(null)
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
   return (
-    <div
-      className="fixed inset-0 z-[95] flex items-center justify-center bg-ink/35 p-6 backdrop-blur-sm"
-      onMouseDown={(event) => {
-        if (!dialogRef.current?.contains(event.target as Node)) onClose()
-      }}
-    >
-      <section
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        className="flex max-h-[88dvh] w-full max-w-[720px] flex-col overflow-hidden rounded-card border border-rule bg-surface shadow-2xl"
-      >
-        <header className="flex shrink-0 items-start justify-between gap-4 border-b border-rule px-6 py-4">
-          <div className="min-w-0">
-            <div className="font-mono text-[11px] uppercase tracking-[0.08em] text-board">
-              {eyebrow}
+    <Dialog.Root open onOpenChange={(open) => { if (!open) onClose() }}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-[95] bg-ink/35 backdrop-blur-sm" />
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-[96] flex max-h-[92dvh] w-[calc(100%-2rem)] max-w-[720px] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-rule bg-surface shadow-2xl outline-none">
+          <header className="flex shrink-0 items-start justify-between gap-4 border-b border-rule px-5 py-5 sm:px-6">
+            <div className="min-w-0">
+              <div className="font-mono text-[11px] uppercase tracking-[0.08em] text-board">{eyebrow}</div>
+              <Dialog.Title className="mt-1 font-serif text-[28px] leading-tight text-ink">{title}</Dialog.Title>
+              <Dialog.Description className="mt-2 text-[13px] leading-relaxed text-ink-muted">{blurb}</Dialog.Description>
             </div>
-            <h2 className="mt-1 font-serif text-[24px] leading-tight text-ink">{title}</h2>
-            <p className="mt-1 text-[12px] leading-relaxed text-ink-muted">{blurb}</p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-ink-muted hover:bg-paper hover:text-ink"
-          >
-            <X size={17} />
-          </button>
-        </header>
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">{children}</div>
-        {footer ? (
-          <div className="shrink-0 border-t border-rule bg-paper px-6 py-3">{footer}</div>
-        ) : null}
-      </section>
-    </div>
+            <Dialog.Close aria-label="Close" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-ink-muted hover:bg-paper"><X size={17} /></Dialog.Close>
+          </header>
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 sm:px-6">{children}</div>
+          {footer ? <div className="shrink-0 border-t border-rule bg-paper px-5 py-4 sm:px-6 [&>div]:flex-wrap">{footer}</div> : null}
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   )
 }
 
@@ -283,6 +257,13 @@ function RejectedList({ rejected }: { rejected: RejectedDraft[] }) {
 
 // ── questions ──────────────────────────────────────────────────────────────
 
+function GenerationSteps({ current }: { current: 'plan' | 'running' | 'review' }) {
+  const active = ['plan', 'running', 'review'].indexOf(current)
+  return <ol aria-label="Generation progress" className="mb-5 grid grid-cols-3 gap-2">
+    {['Choose topics', 'Generate', 'Review & save'].map((label, index) => <li key={label} aria-current={index === active ? 'step' : undefined} className={`flex items-center gap-2 rounded-control px-2 py-2 text-[11px] ${index === active ? 'bg-board-tint text-board' : 'bg-paper text-ink-muted'}`}><span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-current">{index < active ? <Check size={12} /> : index + 1}</span>{label}</li>)}
+  </ol>
+}
+
 function CoverageRow({
   entry,
   checked,
@@ -356,11 +337,9 @@ function QuestionsFlow({ session, onClose }: { session: CourseSession; onClose: 
 
   const plan: PlannedNote[] = useMemo(
     () =>
-      planForSession(session, { maxNotes: coverage.length || 1, maxQuestions: count }).filter(
-        (planned) => selected.has(planned.note.code),
-      ),
+      planForSession(session, { maxNotes: selected.size, maxQuestions: Math.min(count, quota.remaining), noteCodes: [...selected] }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [session.key, count, selected, coverage.length],
+    [session.key, count, selected, quota.remaining],
   )
   const willWrite = plan.reduce((total, planned) => total + planned.wanted.length, 0)
 
@@ -369,25 +348,32 @@ function QuestionsFlow({ session, onClose }: { session: CourseSession; onClose: 
     setError('')
     const abort = new AbortController()
     abortRef.current = abort
-    const result = await synthesizeQuestions({
-      session,
-      plan,
-      trigger: 'manual',
-      status: 'draft',
-      signal: abort.signal,
-      onProgress: setProgress,
-    })
-    abortRef.current = null
-    if (result.error && result.questions.length === 0) {
-      setError(result.error)
-      setStage('plan')
+    try {
+      const result = await synthesizeQuestions({
+        session,
+        plan,
+        trigger: 'manual',
+        status: 'draft',
+        signal: abort.signal,
+        onProgress: setProgress,
+      })
+      abortRef.current = null
+      if (result.error && result.questions.length === 0) {
+        setError(result.error)
+        setStage('plan')
+        setRejected(result.rejected)
+        return
+      }
+      setBatch(result.batch)
+      setWritten(result.questions)
       setRejected(result.rejected)
-      return
+      setStage('review')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Generation failed. Please try again.')
+      setStage('plan')
+    } finally {
+      abortRef.current = null
     }
-    setBatch(result.batch)
-    setWritten(result.questions)
-    setRejected(result.rejected)
-    setStage('review')
   }
 
   function accept() {
@@ -422,10 +408,12 @@ function QuestionsFlow({ session, onClose }: { session: CourseSession; onClose: 
       <Shell
         eyebrow={session.label}
         title="Writing questions"
-        blurb="Notes are read at the same time, not one after another. Each one is thought through before a word is written, which takes about a minute — questions appear here as they are finished and checked."
+        blurb="Drafts appear as they are written and checked against your notes. You can stop at any time and review the questions already completed."
+        footer={<PageAction onClick={() => abortRef.current?.abort()}>Stop and review drafts</PageAction>}
         onClose={() => abortRef.current?.abort()}
       >
-        <div className="flex items-center gap-3 rounded-card border border-board/25 bg-board-tint/50 px-4 py-3">
+        <GenerationSteps current="running" />
+        <div role="status" className="flex items-center gap-3 rounded-card border border-board/25 bg-board-tint/50 px-4 py-3">
           <LoaderCircle size={16} className="shrink-0 animate-spin text-board" />
           <div className="min-w-0">
             <div className="text-[13px] text-ink">{progress?.message ?? 'Planning the run'}</div>
@@ -461,8 +449,8 @@ function QuestionsFlow({ session, onClose }: { session: CourseSession; onClose: 
       <Shell
         eyebrow={session.label}
         title={`${written.length} question${written.length === 1 ? '' : 's'} drafted`}
-        blurb="Nothing here is in your question base yet. Keep what is right for your class and drop the rest."
-        onClose={discard}
+        blurb="Review the answers and sources before adding questions to practice. Closing this window keeps the drafts in your review queue."
+        onClose={onClose}
         footer={
           <div className="flex items-center justify-between gap-3">
             <span className="text-[12px] text-ink-muted">
@@ -479,6 +467,7 @@ function QuestionsFlow({ session, onClose }: { session: CourseSession; onClose: 
           </div>
         }
       >
+        <GenerationSteps current="review" />
         <ul className="space-y-2">
           {written.map((question) => (
             <DraftCard
@@ -505,7 +494,7 @@ function QuestionsFlow({ session, onClose }: { session: CourseSession; onClose: 
     <Shell
       eyebrow={session.label}
       title="Generate questions"
-      blurb={`Written from this class’s own notes — not the course’s other levels. ${quota.remaining} of ${quota.cap} generated questions left for this session.`}
+      blurb={`Choose topics, generate a draft, then review before adding to your bank. ${quota.remaining} of ${quota.cap} generated questions available.`}
       onClose={onClose}
       footer={
         <div className="flex items-center justify-between gap-3">
@@ -535,6 +524,7 @@ function QuestionsFlow({ session, onClose }: { session: CourseSession; onClose: 
         </div>
       }
     >
+      <GenerationSteps current="plan" />
       {error ? <PageNotice className="mb-4">{error}</PageNotice> : null}
       {coverage.length === 0 ? (
         <div className="rounded-card border border-dashed border-rule bg-paper px-6 py-10 text-center">
@@ -548,9 +538,12 @@ function QuestionsFlow({ session, onClose }: { session: CourseSession; onClose: 
       ) : (
         <>
           <p className="mb-3 text-[12px] leading-relaxed text-ink-muted">
-            These notes are taught in {session.label} and have no practice against them. Deselect
-            any you would rather leave alone.
+            Select the topics you want to practise. The run fills gaps in their question coverage, up to your chosen question count.
           </p>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-[12px] text-ink-muted">
+            <span>{selected.size} topics selected · {willWrite} questions planned</span>
+            <button type="button" onClick={() => setSelected(selected.size ? new Set() : new Set(coverage.slice(0, SYNTHESIS.maxNotesPerRun).map((entry) => entry.code)))} className="text-board hover:underline">{selected.size ? 'Clear selection' : 'Select suggested topics'}</button>
+          </div>
           <ul className="overflow-hidden rounded-card border border-rule bg-surface">
             {coverage.map((entry) => (
               <CoverageRow
@@ -588,11 +581,17 @@ function PaperFlow({
 }) {
   const pool = questionsForSession(session)
   const [minutes, setMinutes] = useState<number>(60)
-  const [length, setLength] = useState<number>(PAPER_LENGTHS[1])
+  const [length, setLength] = useState<number>(Math.min(PAPER_LENGTHS[1], pool.length))
+  const [targetWeakness, setTargetWeakness] = useState(true)
+  const [topic, setTopic] = useState('all')
+  const topics = [...new Set(pool.map(noteCodeFor))].sort()
+  const scoped = pool.filter((question) => topic === 'all' || noteCodeFor(question) === topic)
+  const actualLength = Math.min(length, scoped.length)
+  const lengths = [...new Set([Math.min(3, scoped.length), ...PAPER_LENGTHS, scoped.length])].filter((n) => n >= 3 && n <= scoped.length).sort((a, b) => a - b)
   const [error, setError] = useState('')
 
   function assemble() {
-    const result = assemblePaper({ session, timeMinutes: minutes, questionCount: length })
+    const result = assemblePaper({ session, timeMinutes: minutes, questionCount: actualLength, targetWeakness, ...(topic !== 'all' ? { noteCodes: [topic] } : {}) })
     if (result.error || !result.paper) {
       setError(result.error ?? 'Could not assemble a paper.')
       return
@@ -600,28 +599,35 @@ function PaperFlow({
     onAssembled(result.paper.id)
   }
 
-  const synthesizedInPool = pool.filter((question) => question.origin === 'synthesized').length
+  const synthesizedInPool = scoped.filter((question) => question.origin === 'synthesized').length
 
   return (
     <Shell
       eyebrow={session.label}
-      title="Assemble a mock paper"
-      blurb="Built from questions that are already in this session’s bank, so every item on it has been checked. Nothing new is invented for a paper."
+      title="Create a practice test"
+      blurb="Choose your coverage, length and time. Your test uses published questions from this course’s bank."
       onClose={onClose}
       footer={
         <div className="flex items-center justify-between gap-3">
           <span className="text-[12px] text-ink-muted">
-            {pool.length} question{pool.length === 1 ? '' : 's'} to draw on
+            {scoped.length} question{scoped.length === 1 ? '' : 's'} to draw on
             {synthesizedInPool > 0 ? ` · ${synthesizedInPool} synthesized` : ''}
           </span>
-          <PageAction variant="primary" onClick={assemble} disabled={pool.length < 3}>
-            <FileStack size={14} /> Assemble paper
+          <PageAction variant="primary" onClick={assemble} disabled={scoped.length < 3}>
+            <FileStack size={14} /> Create {actualLength}-question test
           </PageAction>
         </div>
       }
     >
       {error ? <PageNotice className="mb-4">{error}</PageNotice> : null}
       <div className="space-y-5">
+        <label className="block text-[13px] text-ink">
+          Topic coverage
+          <select value={topic} onChange={(event) => { setTopic(event.target.value); setError('') }} className="mt-2 block w-full rounded-control border border-rule bg-paper px-3 py-2.5">
+            <option value="all">All topics · balanced coverage</option>
+            {topics.map((code) => <option key={code} value={code}>{code} · {pool.find((question) => noteCodeFor(question) === code)?.topic}</option>)}
+          </select>
+        </label>
         <fieldset>
           <legend className="font-mono text-[11px] uppercase tracking-[0.08em] text-ink-muted">
             Time allowed
@@ -649,15 +655,16 @@ function PaperFlow({
             Questions
           </legend>
           <div className="mt-2 flex flex-wrap gap-2">
-            {PAPER_LENGTHS.map((option) => (
+            {scoped.length < 3 ? <p className="text-[12px] text-ink-muted">Select more topics or add questions to create a test.</p> : null}
+            {lengths.map((option) => (
               <button
                 key={option}
                 type="button"
                 onClick={() => setLength(option)}
-                aria-pressed={length === option}
+                aria-pressed={actualLength === option}
                 disabled={option > pool.length}
                 className={`rounded-control border px-3 py-1.5 text-[12px] transition-colors duration-[120ms] ease-out disabled:opacity-40 ${
-                  length === option
+                  actualLength === option
                     ? 'border-board bg-board text-paper'
                     : 'border-rule bg-surface text-ink hover:border-board'
                 }`}
@@ -667,10 +674,14 @@ function PaperFlow({
             ))}
           </div>
         </fieldset>
+        <label className="flex items-start gap-3 rounded-card border border-rule p-4 text-[13px]">
+          <input type="checkbox" checked={targetWeakness} onChange={(event) => setTargetWeakness(event.target.checked)} className="mt-1 accent-[#2F5D50]" />
+          <span>Focus on areas to improve<span className="mt-1 block text-[12px] text-ink-muted">Prioritize topics from your incorrect answers.</span></span>
+        </label>
         <div className="rounded-card border border-rule bg-paper px-4 py-3 text-[12px] leading-relaxed text-ink-muted">
-          Questions are spread across the notes this class was taught, ordered from Foundation to
-          Challenge, and weighted towards the topics you have been getting wrong.
-          {pool.length < 3
+          {actualLength} question{actualLength === 1 ? '' : 's'} · {minutes} minutes · {scoped.length} available in your selection. Questions are spread across the notes this class was taught, ordered from Foundation to
+          Challenge.
+          {scoped.length < 3
             ? ' There are too few questions in this session to make a paper — generate some first.'
             : ''}
         </div>
@@ -683,6 +694,7 @@ function PaperFlow({
 
 function ReviewFlow({ session, onClose }: { session: CourseSession; onClose: () => void }) {
   const [tick, setTick] = useState(0)
+  const [dropped, setDropped] = useState<Set<string>>(new Set())
   const batches = useMemo(
     () => batchesForSession(session).filter((batch) => batch.status === 'draft'),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -698,7 +710,7 @@ function ReviewFlow({ session, onClose }: { session: CourseSession; onClose: () 
     <Shell
       eyebrow={session.label}
       title="Drafts awaiting review"
-      blurb="Syno wrote these while reading this class’s notes. They are not in your question base until you accept them."
+      blurb="Review each answer and source, then select the questions to add to practice. Unselected questions are discarded when you accept a batch."
       onClose={onClose}
     >
       {batches.length === 0 ? (
@@ -710,6 +722,7 @@ function ReviewFlow({ session, onClose }: { session: CourseSession; onClose: () 
           {batches.map((batch) => {
             const questions = drafts.filter((question) => question.batchId === batch.id)
             if (questions.length === 0) return null
+            const kept = questions.filter((question) => !dropped.has(question.id))
             return (
               <section key={batch.id}>
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -736,18 +749,19 @@ function ReviewFlow({ session, onClose }: { session: CourseSession; onClose: () 
                     </PageAction>
                     <PageAction
                       variant="primary"
+                      disabled={kept.length === 0}
                       onClick={() => {
-                        acceptBatch(batch.id)
+                        acceptBatch(batch.id, kept.map((question) => question.id))
                         setTick((current) => current + 1)
                       }}
                     >
-                      <Check size={14} /> Accept all
+                      <Check size={14} /> Accept {kept.length}
                     </PageAction>
                   </div>
                 </div>
                 <ul className="mt-3 space-y-2">
                   {questions.map((question) => (
-                    <DraftCard key={question.id} question={question} />
+                    <DraftCard key={question.id} question={question} kept={!dropped.has(question.id)} onToggle={() => setDropped((current) => { const next = new Set(current); if (next.has(question.id)) next.delete(question.id); else next.add(question.id); return next })} />
                   ))}
                 </ul>
               </section>
