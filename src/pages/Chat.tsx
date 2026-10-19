@@ -16,7 +16,7 @@ import { Link } from 'react-router'
 import MarkdownText from '@/components/MarkdownText'
 import { GatewayError, GatewayUnavailable, type LlmMessage } from '@/lib/llm'
 import { runAgent, type ToolActivity } from '@/lib/agent'
-import { notesForCourse, searchNotes } from '@/database/notes-tools'
+import { notesForCourse } from '@/database/notes-tools'
 import { topicsForCourse } from '@/lib/course-content'
 import ToolChip from '@/components/ToolChip'
 import ObjectiveScrubber from '@/components/ObjectiveScrubber'
@@ -177,18 +177,7 @@ export default function Chat() {
    * same tool the Notes agent uses, so the model answers from class material
    * rather than from whatever it happens to remember about the syllabus.
    */
-  function systemPrompt(question: string) {
-    const found = searchNotes(activeCourse.id, question, 4)
-    // Narrowing to a unit is a request for focused teaching, so retrieval
-    // narrows with it — but only when that unit actually has a matching
-    // passage, otherwise the tutor would answer with no notes at all.
-    const hits = found.ok ? found.hits : []
-    const inUnit = focusUnit ? hits.filter((hit) => hit.code.split('.')[0] === focusUnit) : hits
-    const usable = inUnit.length > 0 ? inUnit : hits
-    const passages =
-      usable.length > 0
-        ? usable.map((hit) => `[${hit.code} · ${hit.sectionTitle}] ${hit.snippet}`).join('\n')
-        : '(no matching passage in this course’s notes)'
+  function systemPrompt() {
     const focus = focusUnit
       ? [
           `The student has narrowed to Unit ${focusUnit} and is asking for focused`,
@@ -210,8 +199,7 @@ export default function Chat() {
       'read the student’s memory (memory_read) before giving study advice, so it',
       'fits how this student actually learns.',
       '',
-      'Course notes:',
-      passages,
+      'The shared agent retrieves course notes before generating a reply; use that evidence and read further with tools when needed.',
     ].join('\n')
   }
 
@@ -234,7 +222,7 @@ export default function Chat() {
     setMessages((m) => [...m, userMsg, { id: replyId, role: 'assistant', time: now(), text: '', streamed: true }])
 
     const history: LlmMessage[] = [
-      { role: 'system', content: systemPrompt(body) },
+      { role: 'system', content: systemPrompt() },
       ...messages
         .filter((m) => m.text.trim())
         .slice(-8)
@@ -251,6 +239,7 @@ export default function Chat() {
       const { answer, activity, reasoning } = await runAgent({
         messages: history,
         webSearch,
+        focusUnit: focusUnit || undefined,
         signal: abort.signal,
         onActivity: (entry) => { if (abortRef.current === abort) setActivity((current) => [...current, entry]) },
         onReasoning: (_delta, full) => {

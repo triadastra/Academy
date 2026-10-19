@@ -164,10 +164,10 @@ export function searchNotes(
   for (const note of notesForCourse(courseId)) {
     for (const hit of searchNote(noteMarkdown(note), query, limit)) {
       hits.push({ ...hit, code: note.code, noteTitle: note.title })
-      if (hits.length >= limit) return { ok: true, hits }
+
     }
   }
-  return { ok: true, hits }
+  return { ok: true, hits: hits.sort((a, b) => b.score - a.score).slice(0, Math.max(1, Math.min(30, Math.floor(limit) || 8))) }
 }
 
 /** A citation an answer can carry back to the exact passage it came from. */
@@ -179,11 +179,11 @@ export function citePassage(
   const note = findNote(courseId, code)
   if (!note) return fail(`No note ${code} in course ${courseId}.`)
   const section = parseNote(noteMarkdown(note)).sections.find((item) => item.id === sectionId)
-  if (!section) return fail(`No section "${sectionId}" in note ${code}.`)
+  if (!section && sectionId) return fail(`No section "${sectionId}" in note ${code}.`)
   return {
     ok: true,
-    citation: `${note.code} ${note.title} · ${section.title} · rev ${note.revision}`,
-    anchor: `/course/notes?note=${note.code}#${section.id}`,
+    citation: `${note.code} ${note.title}${section ? ` · ${section.title}` : ''} · rev ${note.revision}`,
+    anchor: `/course/notes?note=${encodeURIComponent(note.code)}${section ? `#${section.id}` : ''}`,
   }
 }
 

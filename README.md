@@ -70,6 +70,23 @@ The key is read by the Vite development server and is not bundled into client co
 
 Without a key, the AI endpoint is disabled and chat shows an offline message and preserves your question for retry. Production deployments expect the host platform to provide `/__lp_llm_proxy`.
 
+The gateway must forward `tools` and `tool_choice` to its OpenAI-compatible
+provider and return `tool_calls` unchanged. Dropping these fields makes the
+tutor appear conversational while disabling its note-search and grep tools.
+Launchpad's `host-server/llmToolOptions.js` handles this forwarding. The app
+keeps provider credentials on the host; do not add keys to the browser bundle.
+
+Both course chat and highlighted-passage chat wait for notes to load and retrieve
+course/level-scoped evidence before the first model call. Search ranks keywords,
+headings, summaries and passages rather than requiring the student's entire
+question to appear verbatim. The highlighted-passage tutor has read-only tools.
+Long `notes_read` results return `nextOffset` for continuing through the note;
+oversized results explicitly report truncation. Failed note downloads are
+reported separately from an empty search and retried on a later question.
+
+Run `npm run test:retrieval` for cold-load, search, streamed-tool, pagination and
+scope-isolation regressions; `npm run test:generation` checks assessment generation.
+
 ## Commands
 
 | Command | Purpose |

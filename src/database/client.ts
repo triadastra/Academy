@@ -658,6 +658,9 @@ function persist(database: SynonanceDatabase): WriteOutcome {
  */
 let corpusNotes: UnitNote[] = []
 let corpusRequest: Promise<void> | null = null
+const failedCorpusCourses = new Set<string>()
+let corpusUnavailable = false
+const loadedCorpusCourses = new Set<string>()
 
 /**
  * Load the imported corpus.
@@ -684,10 +687,15 @@ let corpusRequest: Promise<void> | null = null
 async function loadShard(stem: string): Promise<UnitNote[]> {
   if (typeof DecompressionStream === 'function') {
     try {
-      const response = await fetch(`${stem}.json.gz`)
+      const response = await fetch(`${stem}.json.gz`, { signal: AbortSignal.timeout(15000) })
       if (response.ok && response.body) {
-        const stream = response.body.pipeThrough(new DecompressionStream('gzip'))
-        const text = await new Response(stream).text()
+        // Fetch already decodes Content-Encoding: gzip. Static hosts may
+        // instead serve raw gzip bytes, so inspect the body before decoding.
+        const bytes = new Uint8Array(await response.arrayBuffer())
+        const compressed = bytes[0] === 0x1f && bytes[1] === 0x8b
+        const text = compressed
+          ? await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).text()
+          : new TextDecoder().decode(bytes)
         const parsed = JSON.parse(text)
         if (Array.isArray(parsed)) return parsed
       }
@@ -701,10 +709,11 @@ async function loadShard(stem: string): Promise<UnitNote[]> {
       // Otherwise fall through to the uncompressed copy.
     }
   }
-  return fetch(`${stem}.json`)
-    .then((response) => (response.ok ? response.json() : []))
-    .then((notes) => (Array.isArray(notes) ? notes : []))
-    .catch(() => [])
+  const response = await fetch(`${stem}.json`, { signal: AbortSignal.timeout(15000) })
+  if (!response.ok) throw new Error(`Note file unavailable (${response.status}).`)
+  const notes: unknown = await response.json()
+  if (!Array.isArray(notes)) throw new Error('Invalid note file.')
+  return notes as UnitNote[]
 }
 
 /**
@@ -757,19 +766,19 @@ async function mapWithLimit<T, R>(
 
 function ensureCorpusLoaded() {
   if (corpusRequest || typeof fetch !== 'function') return
-  const base = import.meta.env.BASE_URL
+  const base = import.meta.env.BASE_URL || '/'
   const publish = (notes: UnitNote[]) => {
     if (notes.length === 0) return
     corpusNotes = notes
+    mergedCache = null
     window.dispatchEvent(new CustomEvent(DATABASE_EVENT))
   }
-  corpusRequest = fetch(`${base}notes/manifest.json`)
+  corpusRequest = fetch(`${base}notes/manifest.json`, { signal: AbortSignal.timeout(15000) })
     .then((response) => (response.ok ? response.json() : null))
     .then(async (manifest: Array<{ courseId: string }> | null) => {
       if (!Array.isArray(manifest) || manifest.length === 0) {
-        const fallback = await fetch(`${base}course-notes.json`)
-          .then((response) => (response.ok ? response.json() : []))
-          .catch(() => [])
+        const fallback = await fetch(`${base}course-notes.json`, { signal: AbortSignal.timeout(15000) })
+          .then((response) => { if (!response.ok) throw new Error('Notes unavailable'); return response.json() })
         publish(Array.isArray(fallback) ? fallback : [])
         return
       }
@@ -777,13 +786,35 @@ function ensureCorpusLoaded() {
         manifest,
         SHARD_CONCURRENCY,
         (entry) => loadShard(`${base}notes/${entry.courseId}`),
-        [] as UnitNote[],
+        null as UnitNote[] | null,
       )
+      shards.forEach((notes, index) => { if (notes === null) failedCorpusCourses.add(manifest[index].courseId) })
       publish(shards.flat().filter(Boolean) as UnitNote[])
     })
     .catch(() => {
+      corpusUnavailable = true
       // No corpus deployed — the seeded notes are still there.
     })
+}
+
+/** Await initial loading; a failed course can be retried on the next question. */
+export async function ensureCourseNotesLoaded(courseId: string): Promise<void> {
+  ensureCorpusLoaded()
+  await corpusRequest
+  if (loadedCorpusCourses.has(courseId) || (!failedCorpusCourses.has(courseId) && !corpusUnavailable)) return
+  const base = import.meta.env.BASE_URL || '/'
+  try {
+    const notes = await loadShard(`${base}notes/${encodeURIComponent(courseId)}`)
+    const byId = new Map(corpusNotes.map(note => [note.id, note]))
+    notes.forEach(note => byId.set(note.id, note))
+    corpusNotes = [...byId.values()]
+    failedCorpusCourses.delete(courseId)
+    loadedCorpusCourses.add(courseId)
+    mergedCache = null
+    window.dispatchEvent(new CustomEvent(DATABASE_EVENT))
+  } catch {
+    throw new Error('The course notes could not be loaded. Retry before claiming they do not cover a topic.')
+  }
 }
 
 export function getDatabase(): SynonanceDatabase {

@@ -233,6 +233,7 @@ export function parseNote(markdown: string): ParsedNote {
 }
 
 export interface NoteSearchHit {
+  score: number
   sectionId: string
   sectionTitle: string
   /** The matching block's text, trimmed to a readable window around the match. */
@@ -240,32 +241,46 @@ export interface NoteSearchHit {
   line: number
 }
 
-/** Case-insensitive search across a note's blocks. Used by the agent's search tool. */
+const QUERY_STOP_WORDS = new Set('a an the and or of to in on for from with is are was were be been how what why when where which who can could would should do does did please explain describe tell me about my our this that these those it its note notes course lesson understand help using'.split(' '))
+
+/** Keyword fallback for natural questions; exact phrases still rank first. */
+export function noteSearchTerms(query: string): string[] {
+  const runs = query.toLowerCase().match(/[\p{Letter}\p{Number}]+/gu) ?? []
+  return [...new Set(runs.flatMap((run) => {
+    if (/[\u3400-\u9fff]/u.test(run)) {
+      return run.length > 2 ? Array.from({ length: run.length - 1 }, (_, i) => run.slice(i, i + 2)) : [run]
+    }
+    if (QUERY_STOP_WORDS.has(run)) return []
+    return [run.length > 4 && run.endsWith('s') && !run.endsWith('ss') ? run.slice(0, -1) : run]
+  }))]
+}
+
+/** Rank passages, headings and summaries instead of grepping a whole question. */
 export function searchNote(markdown: string, query: string, limit = 8): NoteSearchHit[] {
   const needle = query.trim().toLowerCase()
   if (!needle) return []
+  const terms = noteSearchTerms(query)
   const note = parseNote(markdown)
   const hits: NoteSearchHit[] = []
-
-  for (const section of note.sections) {
-    for (const block of section.blocks) {
-      const haystack = block.text.toLowerCase()
-      const at = haystack.indexOf(needle)
-      if (at === -1) continue
-      const start = Math.max(0, at - 60)
-      const end = Math.min(block.text.length, at + needle.length + 60)
-      hits.push({
-        sectionId: section.id,
-        sectionTitle: section.title,
-        snippet: `${start > 0 ? '…' : ''}${block.text.slice(start, end).trim()}${
-          end < block.text.length ? '…' : ''
-        }`,
-        line: block.line,
-      })
-      if (hits.length >= limit) return hits
-    }
+  const add = (text: string, sectionId: string, sectionTitle: string, line: number) => {
+    const haystack = text.toLowerCase()
+    const exact = haystack.indexOf(needle)
+    const matches = terms.filter(term => haystack.includes(term))
+    if (exact < 0 && matches.length === 0) return
+    const at = exact >= 0 ? exact : Math.min(...matches.map(term => haystack.indexOf(term)))
+    const start = Math.max(0, at - 120)
+    const end = Math.min(text.length, at + Math.min(needle.length, 160) + 350)
+    hits.push({ sectionId, sectionTitle,
+      snippet: `${start > 0 ? '…' : ''}${text.slice(start, end).trim()}${end < text.length ? '…' : ''}`,
+      line, score: (exact >= 0 ? 10 : 0) + matches.length * 2 + matches.length / Math.max(terms.length, 1),
+    })
   }
-  return hits
+  add(`${note.code} ${note.title}\n${note.summary}`, '', note.title, 0)
+  for (const section of note.sections) {
+    add(section.title, section.id, section.title, section.line)
+    for (const block of section.blocks) add(block.text, section.id, section.title, block.line)
+  }
+  return hits.sort((a, b) => b.score - a.score || a.line - b.line).slice(0, Math.max(1, Math.min(30, Math.floor(limit) || 8)))
 }
 
 /**

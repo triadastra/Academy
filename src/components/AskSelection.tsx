@@ -9,8 +9,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import { Loader2, SendHorizonal, Sparkles, X } from 'lucide-react'
-import { chat, GatewayError, GatewayUnavailable } from '@/lib/llm'
+import { GatewayError, GatewayUnavailable } from '@/lib/llm'
 import type { LlmMessage } from '@/lib/llm'
+import { runAgent } from '@/lib/agent'
 
 interface UnitInfo {
   code: string
@@ -165,8 +166,10 @@ export default function AskSelection({
     // The assistant turn is appended once and mutated as tokens stream in.
     setTurns([...history, { role: 'assistant', content: '' }])
     try {
-      await chat({
+      const { answer } = await runAgent({
         messages,
+        noteCode: unit.code,
+        readOnly: true,
         signal: controller.signal,
         onReasoning: () => setThinking(true),
         onToken: (_delta, full) => {
@@ -175,6 +178,7 @@ export default function AskSelection({
           setTurns([...history, { role: 'assistant', content: full }])
         },
       })
+      if (abortRef.current === controller) setTurns([...history, { role: 'assistant', content: answer }])
     } catch (error) {
       if ((error as Error)?.name === 'AbortError') return
       const content =

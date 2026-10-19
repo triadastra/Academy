@@ -37,6 +37,8 @@ export interface LlmToolCall {
 export interface LlmMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
   content: string
+  /** Preserve provider reasoning on assistant tool rounds for Kimi continuation. */
+  reasoning_content?: string
   /** Present on assistant turns that requested tools. */
   tool_calls?: LlmToolCall[]
   /** Required on `tool` messages — ties the result to its request. */
@@ -106,6 +108,29 @@ async function readError(response: Response) {
   )
 }
 
+/** Decode complete SSE events, including CRLF frames and an EOF without a blank line. */
+async function* ssePayloads(body: ReadableStream<Uint8Array>) {
+  const reader = body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      buffer += done ? decoder.decode() : decoder.decode(value, { stream: true })
+      buffer = buffer.replace(/\r\n/g, '\n')
+      const events = buffer.split('\n\n')
+      buffer = events.pop() ?? ''
+      if (done && buffer.trim()) { events.push(buffer); buffer = '' }
+      for (const event of events) {
+        const payload = event.split('\n').filter(line => line.startsWith('data:'))
+          .map(line => line.slice(5).trimStart()).join('\n').trim()
+        if (payload && payload !== '[DONE]') yield payload
+      }
+      if (done) return
+    }
+  } finally { await reader.cancel().catch(() => {}); reader.releaseLock() }
+}
+
 /**
  * One chat completion. Streams when `onToken` is supplied, and resolves with
  * the complete text either way.
@@ -163,43 +188,25 @@ export async function chat({
 
   // Moonshot is OpenAI-dialect, and the proxy forwards the provider's stream
   // verbatim — so this parses OpenAI `data:` chunks.
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
   let full = ''
   let reasoning = ''
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-
-    // Events are separated by a blank line; keep the trailing partial in place.
-    const events = buffer.split('\n\n')
-    buffer = events.pop() ?? ''
-
-    for (const event of events) {
-      for (const line of event.split('\n')) {
-        if (!line.startsWith('data:')) continue
-        const payload = line.slice(5).trim()
-        if (!payload || payload === '[DONE]') continue
-        try {
-          const chunk = JSON.parse(payload)
-          const delta = chunk?.choices?.[0]?.delta
-          const thinking = delta?.reasoning_content
-          if (typeof thinking === 'string' && thinking) {
-            reasoning += thinking
-            onReasoning?.(thinking, reasoning)
-          }
-          const answer = delta?.content
-          if (typeof answer === 'string' && answer) {
-            full += answer
-            onToken?.(answer, full)
-          }
-        } catch {
-          // A malformed chunk should not abort a good stream.
-        }
+  for await (const payload of ssePayloads(response.body)) {
+    try {
+      const chunk = JSON.parse(payload)
+      const delta = chunk?.choices?.[0]?.delta
+      const thinking = delta?.reasoning_content
+      if (typeof thinking === 'string' && thinking) {
+        reasoning += thinking
+        onReasoning?.(thinking, reasoning)
       }
+      const answer = delta?.content
+      if (typeof answer === 'string' && answer) {
+        full += answer
+        onToken?.(answer, full)
+      }
+    } catch {
+      // A malformed chunk should not abort a good stream.
     }
   }
 
@@ -257,6 +264,7 @@ export async function complete({
       role: 'assistant',
       content: String(choice?.message?.content ?? ''),
       tool_calls: choice?.message?.tool_calls,
+      reasoning_content: choice?.message?.reasoning_content,
     },
     finishReason: String(choice?.finish_reason ?? 'stop'),
   }
@@ -313,54 +321,38 @@ export async function streamComplete({
   if (!response.ok) throw await readError(response)
   if (!response.body) throw new GatewayUnavailable('Gateway returned no stream')
 
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
   let content = ''
   let reasoning = ''
   let finishReason = 'stop'
   const calls: LlmToolCall[] = []
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const events = buffer.split('\n\n')
-    buffer = events.pop() ?? ''
+  for await (const payload of ssePayloads(response.body)) {
+    try {
+      const chunk = JSON.parse(payload)
+      const choice = chunk?.choices?.[0]
+      if (choice?.finish_reason) finishReason = choice.finish_reason
+      const delta = choice?.delta
+      if (!delta) continue
 
-    for (const event of events) {
-      for (const line of event.split('\n')) {
-        if (!line.startsWith('data:')) continue
-        const payload = line.slice(5).trim()
-        if (!payload || payload === '[DONE]') continue
-        try {
-          const chunk = JSON.parse(payload)
-          const choice = chunk?.choices?.[0]
-          if (choice?.finish_reason) finishReason = choice.finish_reason
-          const delta = choice?.delta
-          if (!delta) continue
-
-          const thinking = delta.reasoning_content
-          if (typeof thinking === 'string' && thinking) {
-            reasoning += thinking
-            onReasoning?.(thinking, reasoning)
-          }
-          if (typeof delta.content === 'string' && delta.content) {
-            content += delta.content
-            onToken?.(delta.content, content)
-          }
-          for (const entry of delta.tool_calls ?? []) {
-            const index = typeof entry.index === 'number' ? entry.index : 0
-            calls[index] ??= { id: '', type: 'function', function: { name: '', arguments: '' } }
-            if (entry.id) calls[index].id = entry.id
-            if (entry.type) calls[index].type = entry.type
-            if (entry.function?.name) calls[index].function.name += entry.function.name
-            if (entry.function?.arguments) calls[index].function.arguments += entry.function.arguments
-          }
-        } catch {
-          // A malformed chunk should not abort a good stream.
-        }
+      const thinking = delta.reasoning_content
+      if (typeof thinking === 'string' && thinking) {
+        reasoning += thinking
+        onReasoning?.(thinking, reasoning)
       }
+      if (typeof delta.content === 'string' && delta.content) {
+        content += delta.content
+        onToken?.(delta.content, content)
+      }
+      for (const entry of delta.tool_calls ?? []) {
+        const index = typeof entry.index === 'number' ? entry.index : 0
+        calls[index] ??= { id: '', type: 'function', function: { name: '', arguments: '' } }
+        if (entry.id) calls[index].id = entry.id
+        if (entry.type) calls[index].type = entry.type
+        if (entry.function?.name) calls[index].function.name += entry.function.name
+        if (entry.function?.arguments) calls[index].function.arguments += entry.function.arguments
+      }
+    } catch {
+      // A malformed chunk should not abort a good stream.
     }
   }
 
@@ -369,6 +361,7 @@ export async function streamComplete({
     message: {
       role: 'assistant',
       content,
+      ...(reasoning ? { reasoning_content: reasoning } : {}),
       ...(present.length ? { tool_calls: present } : {}),
     },
     finishReason: present.length ? 'tool_calls' : finishReason,
