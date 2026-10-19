@@ -115,3 +115,9 @@ For details about storage, sessions, role enforcement, data ownership, and the w
 ## Before production
 
 Authentication, authorization, shared writes, tenancy, audit records, and durable user data must move to a trusted server before the application is used with sensitive or multi-user institutional data. The current browser-local implementation is intended for prototyping and evaluation.
+
+### Hosted development connections
+
+When Launchpad runs the Vite development server behind its reverse proxy, `proxyKeepalive()` sends a server heartbeat every 10 seconds. This prevents an idle HMR connection from timing out and causing the browser to reload. Keep the plugin registered in `vite.config.ts`; the helper file alone does not enable it. Production builds do not include this serve-only plugin.
+
+Run `npm run test:keepalive` to check registration, heartbeat timing, and timer cleanup.

@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "postbuild": "node -e \"const fs=require('fs');for(const f of ['dist/course-notes.json','dist/course-notes.fragments.json'])fs.rmSync(f,{force:true});const a='dist/assets';for(const f of fs.readdirSync(a))if(/\\.(ttf|woff)$/.test(f))fs.rmSync(a+'/'+f);const n='dist/notes';for(const f of fs.readdirSync(n))if(f.endsWith('.json')&&f!=='manifest.json')fs.rmSync(n+'/'+f);fs.mkdirSync('dist/.launchpad',{recursive:true});fs.writeFileSync('dist/.launchpad/deploy.json',JSON.stringify({runtime:'static',outputDirectory:'.',spaFallback:true,healthPath:'/'},null,2));\"",
     "test:generation": "node scripts/test-generation.mjs",
-    "test:retrieval": "node scripts/test-retrieval.mjs"
+    "test:retrieval": "node scripts/test-retrieval.mjs",
+    "test:keepalive": "node scripts/test-proxy-keepalive.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
