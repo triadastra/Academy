@@ -8,7 +8,44 @@ import type { Identity } from './notes-service'
 /** Uses Academy's existing Launchpad process and its preserved data directory. */
 export function sharedNotesBackend(env: Record<string, string>): Plugin {
   let service: NotesService | undefined
-  const attach = (server: ViteDevServer | PreviewServer) => {
+  const securityHeaders = (isPreview: boolean) => {
+    const devCsp =
+      "default-src 'self'; " +
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
+      "style-src 'self' 'unsafe-inline'; " +
+      "img-src 'self' data: blob: https:; " +
+      "font-src 'self'; " +
+      "connect-src 'self' ws://localhost:* ws://127.0.0.1:* https:; " +
+      "worker-src 'self' blob:; " +
+      "object-src 'none'; " +
+      "base-uri 'self'; " +
+      "frame-ancestors 'none'; " +
+      "form-action 'self'"
+    const prodCsp =
+      "default-src 'self'; " +
+      "script-src 'self'; " +
+      "style-src 'self' 'unsafe-inline'; " +
+      "img-src 'self' data: blob: https:; " +
+      "font-src 'self'; " +
+      "connect-src 'self' https:; " +
+      "worker-src 'self' blob:; " +
+      "object-src 'none'; " +
+      "base-uri 'self'; " +
+      "frame-ancestors 'none'; " +
+      "form-action 'self'; " +
+      "upgrade-insecure-requests"
+    return {
+      'Content-Security-Policy': isPreview ? prodCsp : devCsp,
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY',
+      'Referrer-Policy': 'strict-origin-when-cross-origin',
+      'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Strict-Transport-Security':
+        'max-age=63072000; includeSubDomains; preload',
+    }
+  }
+  const attach = (server: ViteDevServer | PreviewServer, isPreview = false) => {
     const root = process.cwd()
     const seed = JSON.parse(
       fs.readFileSync(
@@ -40,6 +77,13 @@ export function sharedNotesBackend(env: Record<string, string>): Plugin {
       },
       modelCall: createMoonshotCall(env),
     })
+    const headers = securityHeaders(isPreview)
+    server.middlewares.use((_req, res, next) => {
+      for (const [name, value] of Object.entries(headers)) {
+        res.setHeader(name, value)
+      }
+      next()
+    })
     // Never allow Vite's file serving to expose durable notes or image originals.
     server.middlewares.use((req, res, next) => {
       let url: string
@@ -67,7 +111,7 @@ export function sharedNotesBackend(env: Record<string, string>): Plugin {
   }
   return {
     name: 'academy-shared-notes',
-    configureServer: attach,
-    configurePreviewServer: attach,
+    configureServer: (server) => attach(server, false),
+    configurePreviewServer: (server) => attach(server, true),
   }
 }

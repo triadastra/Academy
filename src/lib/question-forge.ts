@@ -716,7 +716,7 @@ export async function synthesizeQuestions(options: ForgeOptions): Promise<ForgeR
     slot.phase = 'thinking'
     report('running', `Reading ${planned.note.code} ${planned.note.title} — ${planned.reason}`)
 
-    let reply = ''
+    let reply: string
     let cursor = 0
     const seenObjects = new Set<string>()
     // The reasoning stream arrives in ~1,900 chunks. Reporting each one would

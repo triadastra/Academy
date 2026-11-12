@@ -42,12 +42,6 @@
       "initials": "CS",
       "role": "Admin",
       "email": "celsiastarlfare@outlook.com",
-      "passwordHash": {
-        "algorithm": "pbkdf2-sha256",
-        "iterations": 120000,
-        "salt": "5f5d6dc2303d3f16fd2b676a08f9e5cc",
-        "hash": "c5ee24f4c588efe6c712409453c6598514ba2797bc90aa5212f353665dbaf8af"
-      },
       "schoolId": "ADM00001",
       "status": "active",
       "createdAt": "2025-08-18T01:00:00.000Z"

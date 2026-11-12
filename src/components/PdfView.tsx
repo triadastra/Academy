@@ -71,8 +71,9 @@ export default function PdfView({
         const worker = pdfjs.PDFWorker.create({ port: new PdfWorker() })
         close = () => worker.destroy()
 
-        const document_ = await pdfjs.getDocument({ url: src, worker }).promise
-        close = () => void document_.destroy() // takes the worker with it
+        const task = pdfjs.getDocument({ url: src, worker })
+        close = () => void task.destroy()
+        const document_ = await task.promise
         if (cancelled) return
 
         const host = sheet.current

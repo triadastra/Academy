@@ -696,7 +696,7 @@ export async function runAgent({
       }
 
       let result: unknown
-      let ok = true
+      let ok: boolean
       try {
         assertScope()
         result = await local.run(args, courseId)

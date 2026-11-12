@@ -54,6 +54,20 @@ const inputSchema = z
     quote: z.string().max(6000).optional(),
   })
   .strict()
+
+const ACTIVE_CONTENT_PATTERN =
+  /<\/?(?:script|iframe|object|embed|style|link|meta|base|form|input|button|textarea|select|option)\b/i
+const DANGEROUS_URL_PATTERN =
+  /javascript:|data:text\/html|data:application\/xhtml|vbscript:|on\w+\s*=/i
+
+function validateSource(source: string): void {
+  if (ACTIVE_CONTENT_PATTERN.test(source)) {
+    throw failure('Uploaded text contains disallowed HTML tags.', 400)
+  }
+  if (DANGEROUS_URL_PATTERN.test(source)) {
+    throw failure('Uploaded text contains dangerous URLs or event handlers.', 400)
+  }
+}
 function score(packet: NotePacket) {
   return packet.ledger.reduce((sum, entry) => sum + entry.points, 0)
 }
@@ -86,12 +100,16 @@ async function body(req: IncomingMessage, limit: number): Promise<Buffer> {
   }
   return Buffer.concat(chunks)
 }
+const API_SECURITY_HEADERS = {
+  'Content-Type': 'application/json',
+  'Cache-Control': 'no-store',
+  'X-Content-Type-Options': 'nosniff',
+  'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'",
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+}
 function respond(res: ServerResponse, status: number, value: unknown) {
-  res.writeHead(status, {
-    'Content-Type': 'application/json',
-    'Cache-Control': 'no-store',
-    'X-Content-Type-Options': 'nosniff',
-  })
+  res.writeHead(status, API_SECURITY_HEADERS)
   res.end(JSON.stringify(value))
 }
 export class NotesService {
@@ -275,6 +293,7 @@ export class NotesService {
               packet.status === 'published' ||
               packet.ledger.length,
           )
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
           .map(({ checkpoint: _checkpoint, ...packet }) =>
             packet.submittedBy === actor
               ? packet
@@ -366,6 +385,9 @@ export class NotesService {
           'Content-Type': image.mime,
           'Cache-Control': 'private, max-age=300',
           'X-Content-Type-Options': 'nosniff',
+          'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'",
+          'X-Frame-Options': 'DENY',
+          'Referrer-Policy': 'strict-origin-when-cross-origin',
         })
         res.end(
           fs.readFileSync(
@@ -380,6 +402,11 @@ export class NotesService {
         )
         await this.ensureCourse(input.courseId)
         if (this.unstreamed(input.courseId)) input.level = undefined
+        validateSource(input.source)
+        if (input.quote) validateSource(input.quote)
+        if (ACTIVE_CONTENT_PATTERN.test(input.title)) {
+          throw failure('The guide title contains disallowed HTML tags.', 400)
+        }
         const notes = this.courseNotes(input.courseId)
         const note = input.noteId
           ? notes.find(
@@ -655,6 +682,7 @@ export class NotesService {
     const controller = new AbortController(),
       attempt = randomUUID()
     this.controllers.set(packet.id, controller)
+    let timeout: ReturnType<typeof setTimeout> | undefined
     try {
       const note = this.target(packet)
       if (packet.fromRevision > 0 && !note)
@@ -671,6 +699,16 @@ export class NotesService {
         saved.before === before
           ? saved
           : undefined
+      // Review guides can be long. A 60 kB source plus an existing guide needs
+      // time for the model to read, reason and write a complete revised guide,
+      // and a second verifier pass runs after that. Scale the ceiling with the
+      // total review context: at least 3 minutes, up to 15 minutes, roughly
+      // 8 ms per character of source + existing guide.
+      const reviewTimeoutMs = Math.max(
+        180_000,
+        Math.min(900_000, (packet.source.length + before.length) * 8),
+      )
+      timeout = setTimeout(() => controller.abort(), reviewTimeoutMs)
       this.patch(packet.id, (row) => {
         row.status = 'indexing'
         row.stage = 'Reading the guide and checking coverage'
@@ -813,6 +851,7 @@ export class NotesService {
             : (error as Error).message
         })
     } finally {
+      clearTimeout(timeout)
       this.controllers.delete(packet.id)
       this.processing = false
     }

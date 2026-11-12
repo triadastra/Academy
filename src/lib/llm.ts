@@ -93,7 +93,7 @@ interface ChatOptions {
 }
 
 async function readError(response: Response) {
-  let detail = ''
+  let detail: string
   try {
     const body = await response.json()
     detail = typeof body?.error === 'string' ? body.error : JSON.stringify(body)
