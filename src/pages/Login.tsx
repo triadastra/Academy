@@ -15,6 +15,7 @@ import {
   signInLockoutSeconds,
   signInWithLaunchpad,
 } from '@/database/client'
+import { provisionAdministrator } from '@/database/accounts'
 import {
   currentLaunchpadUser,
   isAvailable as launchpadAvailable,
@@ -31,8 +32,10 @@ export default function Login() {
   const navigate = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
   const [adminError, setAdminError] = useState('')
   const [adminOpen, setAdminOpen] = useState(false)
+  const [provisioning, setProvisioning] = useState(false)
   // Deriving the PBKDF2 key takes close to a second on the pure-JS path the
   // plain-http deployment falls back to, so the form has to say it is working.
   const [adminBusy, setAdminBusy] = useState(false)
@@ -128,18 +131,43 @@ export default function Login() {
         navigate('/admin/audit', { replace: true })
         return
       }
+      if (result.reason === 'no-credential') {
+        setProvisioning(true)
+        return
+      }
       setAdminError(
         result.reason === 'locked'
           ? `Too many failed attempts. Try again in ${Math.ceil(result.seconds / 60)} minute${result.seconds > 60 ? 's' : ''}.`
           : result.reason === 'suspended'
             ? 'This administrator account has been suspended.'
-            : result.reason === 'no-credential'
-              ? 'This administrator account has no password set yet. It must be provisioned before it can be used.'
-              : // Deliberately does not distinguish an unknown address from a
-                // wrong password: separate messages turn the form into an
-                // account-enumeration tool.
-                'That administrator email or password is incorrect.',
+            : // Deliberately does not distinguish an unknown address from a
+              // wrong password: separate messages turn the form into an
+              // account-enumeration tool.
+              'That administrator email or password is incorrect.',
       )
+    } finally {
+      setAdminBusy(false)
+    }
+  }
+
+  async function provisionAsAdministrator() {
+    if (adminBusy) return
+    if (password !== confirmPassword) {
+      setAdminError('The two passwords do not match.')
+      return
+    }
+    setAdminError('')
+    setAdminBusy(true)
+    try {
+      const result = await provisionAdministrator(email, password)
+      if (result.ok) {
+        const signIn = await signInAdministrator(email, password)
+        if (signIn.ok) {
+          navigate('/admin/audit', { replace: true })
+          return
+        }
+      }
+      setAdminError(result.ok ? 'Could not sign in after provisioning.' : result.message)
     } finally {
       setAdminBusy(false)
     }
@@ -279,18 +307,38 @@ export default function Login() {
                       value={password}
                       onChange={(event) => setPassword(event.target.value)}
                       onKeyDown={(event) => {
-                        if (event.key === 'Enter') signInAsAdministrator()
+                        if (event.key === 'Enter') {
+                          if (provisioning) provisionAsAdministrator()
+                          else signInAsAdministrator()
+                        }
                       }}
-                      placeholder="Password"
-                      autoComplete="current-password"
+                      placeholder={provisioning ? 'Create password' : 'Password'}
+                      autoComplete={provisioning ? 'new-password' : 'current-password'}
                       className="w-full bg-surface border border-rule rounded-control pl-9 pr-3 py-2.5 text-[13px] text-ink placeholder:text-ink-muted/60 focus:outline-none focus:border-board transition-colors duration-[120ms] ease-out"
                     />
                   </label>
+                  {provisioning ? (
+                    <label className="relative">
+                      <span className="sr-only">Confirm administrator password</span>
+                      <LockKeyhole size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-muted pointer-events-none" />
+                      <input
+                        type="password"
+                        value={confirmPassword}
+                        onChange={(event) => setConfirmPassword(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') provisionAsAdministrator()
+                        }}
+                        placeholder="Confirm password"
+                        autoComplete="new-password"
+                        className="w-full bg-surface border border-rule rounded-control pl-9 pr-3 py-2.5 text-[13px] text-ink placeholder:text-ink-muted/60 focus:outline-none focus:border-board transition-colors duration-[120ms] ease-out"
+                      />
+                    </label>
+                  ) : null}
                 </div>
 
                 <button
                   type="button"
-                  onClick={signInAsAdministrator}
+                  onClick={provisioning ? provisionAsAdministrator : signInAsAdministrator}
                   disabled={adminBusy || lockedSeconds > 0}
                   className="mt-3 w-full flex items-center justify-center gap-2 border border-rule text-ink text-[14px] font-medium rounded-control py-2.5 hover:bg-paper disabled:opacity-60 disabled:hover:bg-transparent transition-colors duration-[120ms] ease-out"
                 >
@@ -299,8 +347,23 @@ export default function Login() {
                     ? 'Checking…'
                     : lockedSeconds > 0
                       ? `Locked for ${Math.ceil(lockedSeconds / 60)} min`
-                      : 'Sign in as administrator'}
+                      : provisioning
+                        ? 'Set administrator password'
+                        : 'Sign in as administrator'}
                 </button>
+
+                {provisioning ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProvisioning(false)
+                      setAdminError('')
+                    }}
+                    className="mt-2 w-full text-[12px] text-ink-muted hover:text-ink transition-colors duration-[120ms] ease-out"
+                  >
+                    Back to administrator sign-in
+                  </button>
+                ) : null}
 
                 {adminError ? <p role="alert" className="mt-2 text-[12px] text-mark">{adminError}</p> : null}
               </>

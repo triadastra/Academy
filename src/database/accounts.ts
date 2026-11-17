@@ -24,6 +24,7 @@ import {
 } from './client'
 import { pushSystemNotification } from './notifications'
 import { endLaunchpadSession } from '@/lib/launchpad-auth'
+import { hashPassword, passwordProblem } from '@/lib/password'
 import type { AccountStatus, ApplicationUser, UserDatabase, UserRole } from './types'
 
 /** An account as the admin table shows it, joined to its per-user activity. */
@@ -155,6 +156,54 @@ function administratorCount() {
   return getDatabase().users.filter(
     (user) => user.role === 'Admin' && (user.status ?? 'active') === 'active',
   ).length
+}
+
+/**
+ * One-time first-run provisioning for an administrator account.
+ *
+ * The shipped seed contains an admin row but no password hash, so the public
+ * repository never leaks a usable credential. This function sets that first
+ * password. It refuses once ANY administrator has a password hash, so it cannot
+ * be used to reset or hijack existing credentials.
+ *
+ * Like every other account operation here, this runs client-side and is
+ * therefore UX hygiene, not an access-control boundary.
+ */
+export async function provisionAdministrator(
+  email: string,
+  password: string,
+): Promise<AccountResult<void>> {
+  const database = getDatabase()
+  const anyProvisioned = database.users.some(
+    (user) => user.role === 'Admin' && user.passwordHash,
+  )
+  if (anyProvisioned) {
+    return deny('An administrator password is already set. Sign in normally.')
+  }
+
+  const problem = passwordProblem(password)
+  if (problem) return deny(problem)
+
+  const normalizedEmail = email.trim().toLowerCase()
+  const administrator = database.users.find(
+    (user) => user.role === 'Admin' && user.email.toLowerCase() === normalizedEmail,
+  )
+  if (!administrator) return deny('No matching administrator account.')
+
+  const passwordHash = await hashPassword(password)
+  updateDatabase((draft) => {
+    const user = draft.users.find((item) => item.id === administrator.id)
+    if (user) user.passwordHash = passwordHash
+  })
+  recordAudit({
+    action: 'account.password-changed',
+    subjectId: administrator.id,
+    subjectName: administrator.name,
+    purpose: 'Administrator password provisioned on first run',
+    rows: 1,
+    result: 'success',
+  })
+  return { ok: true, value: undefined }
 }
 
 // ── Suspension ─────────────────────────────────────────────────────────────

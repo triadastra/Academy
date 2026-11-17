@@ -349,10 +349,6 @@ try {
     note.markdown = badGuide
     note.revision++
   })
-  const corrected = badGuide.replace(
-    badLine,
-    'The derivative of x squared is 2x.',
-  )
   const reportAssessment = {
     ...assessment,
     completeness: 8,

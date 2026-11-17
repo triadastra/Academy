@@ -189,7 +189,7 @@ export function extractDelta(
 
 /** Read the stored delta, or null when there is nothing usable to read. */
 export function readDelta(currentSchemaVersion: number): DatabaseDelta | null {
-  let raw: string | null = null
+  let raw: string | null
   try {
     raw = localStorage.getItem(DELTA_STORAGE_KEY)
   } catch {
