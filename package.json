@@ -13,7 +13,8 @@
     "test:retrieval": "node scripts/test-retrieval.mjs",
     "test:keepalive": "node scripts/test-proxy-keepalive.mjs",
     "start": "vite preview --host 0.0.0.0 --port ${PORT:-4173} --strictPort",
-    "test:notes": "node scripts/test-notes.mjs"
+    "test:notes": "node scripts/test-notes.mjs",
+    "test:performance": "node scripts/test-performance.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

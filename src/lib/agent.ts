@@ -61,6 +61,26 @@ import {
   readSection,
   searchNotes,
 } from '@/database/notes-tools'
+import { courseSnapshot, fluencyBand, recordFluency } from '@/database/performance'
+import { isPersonalCourseId } from '@/database/personal'
+
+/**
+ * A personal course may only use tools that read its own notes and the
+ * student's own data. Everything else either searches the school's shared
+ * material (questions, mock papers, the whole-database grep) or writes into a
+ * shared table (question drafts, papers, note revisions).
+ */
+const PERSONAL_TOOLS = new Set([
+  'notes_search',
+  'notes_list',
+  'notes_read',
+  'notes_read_section',
+  'notes_cite',
+  'performance_get',
+  'fluency_update',
+  'memory_read',
+  'memory_update',
+])
 
 type ToolArgs = Record<string, never> & Record<string, unknown>
 
@@ -228,6 +248,60 @@ export const LOCAL_TOOLS = new Map<string, LocalTool>([
           questionId: attempt.questionId,
           result: attempt.result,
         })),
+      }
+    },
+  ),
+  tool(
+    'performance_get',
+    'Read this student’s own performance in the active course from their Performance dashboard: current and projected grade, target, the knowledge estimate and how fast it is fading, recent study time, practice accuracy, recent results, and the fluency ratings already recorded per topic. Use it when the student asks how they are doing, what they are good or bad at, or what to focus on.',
+    obj({}),
+    () => 'Reading your performance dashboard',
+    (_a, courseId) => courseSnapshot(courseId),
+  ),
+  tool(
+    'fluency_update',
+    'Record how fluent the student is in specific topics of THIS course on their Performance dashboard. Score 0–100 (75+ strong, 50–74 developing, under 50 weak). Base each score on evidence: how they explained or answered in this conversation, their results from performance_get, the questions they got wrong. Call it after summarising what they are mastering and what they are weak at, or after checking their understanding of a topic. Give a short, specific evidence line for each. A topic rated again replaces its old score. Do not rate topics you have no evidence about.',
+    obj(
+      {
+        ratings: {
+          type: 'array',
+          maxItems: 12,
+          items: obj(
+            {
+              topic: { type: 'string', description: 'Topic name, preferably the note title.' },
+              noteCode: { type: 'string', description: 'Course note code, when the topic is one note.' },
+              score: { type: 'number', minimum: 0, maximum: 100 },
+              evidence: { type: 'string', description: 'One line: what shows this.' },
+            },
+            ['topic', 'score', 'evidence'],
+          ),
+        },
+      },
+      ['ratings'],
+    ),
+    (a) => {
+      const ratings: unknown = a.ratings
+      const count = Array.isArray(ratings) ? ratings.length : 0
+      return `Updating fluency on your dashboard · ${count} topic${count === 1 ? '' : 's'}`
+    },
+    (a, courseId) => {
+      if (!courseId) return { ok: false, error: 'No active course.' }
+      const raw = Array.isArray(a.ratings) ? (a.ratings as unknown[]) : []
+      const saved = recordFluency(
+        courseId,
+        raw.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object').map((item) => ({
+          topic: str(item.topic),
+          score: num(item.score, NaN),
+          evidence: str(item.evidence),
+          noteCode: str(item.noteCode) || undefined,
+        })),
+        'chat',
+      )
+      if (saved.length === 0) return { ok: false, error: 'No valid ratings: each needs a topic and a 0–100 score.' }
+      return {
+        ok: true,
+        saved: saved.map((rating) => ({ topic: rating.topic, score: rating.score, band: fluencyBand(rating.score) })),
+        note: 'Shown on the student’s Performance dashboard under Fluency. Tell them briefly what you recorded.',
       }
     },
   ),
@@ -574,9 +648,11 @@ export async function runAgent({
       throw new DOMException('The active course or student changed.', 'AbortError')
     }
   }
-  const readTools = new Set(['notes_search', 'notes_list', 'notes_read', 'notes_read_section', 'notes_cite', 'database_grep', 'questions_search', 'progress_get', 'memory_read', 'mock_tests_list'])
+  const readTools = new Set(['notes_search', 'notes_list', 'notes_read', 'notes_read_section', 'notes_cite', 'database_grep', 'questions_search', 'progress_get', 'performance_get', 'memory_read', 'mock_tests_list'])
+  const personal = isPersonalCourseId(courseId)
   const specs = [...LOCAL_TOOLS.values()].map((entry) => entry.spec)
     .filter(spec => !readOnly || readTools.has(spec.function.name))
+    .filter(spec => !personal || PERSONAL_TOOLS.has(spec.function.name))
   const availableNames = new Set(specs.map(spec => spec.function.name))
   if (webSearch) specs.push(WEB_SEARCH_TOOL)
 
@@ -627,7 +703,7 @@ export async function runAgent({
    * twice.
    */
   const finish = (answer: string) => {
-    if (!readOnly && touchedNotes.size > 0) {
+    if (!readOnly && !personal && touchedNotes.size > 0) {
       try {
         maybeAutoSynthesize(resolveSession(), [...touchedNotes])
       } catch {

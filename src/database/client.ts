@@ -193,6 +193,12 @@ function isSessionAuthorizedForAccount(
   institutionId: string,
 ) {
   if (session?.identityProvider === 'local-admin') return account?.role === 'Admin'
+  // A personal account is private to this browser and has no institution
+  // binding to check — but it must really be a personal row, so a school
+  // account cannot be opened through the personal door (or vice versa).
+  if (session?.identityProvider === 'personal')
+    return account?.accountKind === 'personal' && account.role === 'Student'
+  if (account?.accountKind === 'personal') return false
   return hasLaunchpadInstitutionBinding(account, session, institutionId)
 }
 
@@ -800,6 +806,8 @@ function ensureCorpusLoaded() {
 
 /** Await initial loading; a failed course can be retried on the next question. */
 export async function ensureCourseNotesLoaded(courseId: string): Promise<void> {
+  // Personal courses have no published corpus; their notes are already local.
+  if (courseId.startsWith('personal-')) return
   ensureCorpusLoaded()
   await corpusRequest
   if (loadedCorpusCourses.has(courseId) || (!failedCorpusCourses.has(courseId) && !corpusUnavailable)) return
@@ -1039,7 +1047,10 @@ function signInUser(
     ...sessionDeadlines(now),
   }
   writeDurableAuth({ userId, ...session })
-  auditSession('session.signin', userId, account.name, `Signed in as ${account.role}`)
+  // The institution's audit log is shared with its administrators. A personal
+  // account is not the institution's to audit, so it leaves nothing there.
+  if (identityProvider !== 'personal')
+    auditSession('session.signin', userId, account.name, `Signed in as ${account.role}`)
   updateDatabase((draft) => {
     draft.appSettings.currentUserId = userId
     userDatabaseFrom(draft, userId).session = session
@@ -1442,6 +1453,103 @@ export async function setAdministratorPassword(
   return { ok: true }
 }
 
+// ── Personal accounts ─────────────────────────────────────────────────────
+//
+// A personal account is a private workspace on this browser: its own courses,
+// files, notes and grade book, and none of the school's shared material. It
+// signs in with a username and a PBKDF2-verified password — like the local
+// administrator form, this is credential hygiene rather than a security
+// boundary (see "Server-side requirements" in src/database/README.md).
+
+const USERNAME_PATTERN = /^[a-z0-9][a-z0-9._-]{2,31}$/
+
+/** Whether the signed-in account is a personal (non-school) account. */
+export function isPersonalAccount() {
+  if (!isAuthenticated()) return false
+  return getAuthSession().identityProvider === 'personal' && getCurrentUser()?.accountKind === 'personal'
+}
+
+/**
+ * The student workspace guard: a verified school member, or a personal
+ * account. Shared institution content is still filtered by account kind
+ * further down (course selection, notes), so a personal account reaching a
+ * student route sees only its own material.
+ */
+export function canOpenStudentWorkspace() {
+  return hasVerifiedInstitutionMembership() || isPersonalAccount()
+}
+
+export async function createPersonalAccount(input: {
+  displayName: string
+  username: string
+  password: string
+}): Promise<{ ok: true } | { ok: false; message: string }> {
+  const username = input.username.trim().toLowerCase()
+  const displayName = input.displayName.trim()
+  if (!displayName) return { ok: false, message: 'Tell us what to call you.' }
+  if (!USERNAME_PATTERN.test(username))
+    return {
+      ok: false,
+      message: 'Usernames are 3–32 characters: lowercase letters, numbers, dots, dashes or underscores.',
+    }
+  const problem = passwordProblem(input.password)
+  if (problem) return { ok: false, message: problem }
+  const taken = getDatabase().users.some(
+    (user) => user.accountKind === 'personal' && user.username === username,
+  )
+  if (taken) return { ok: false, message: 'That username is already used on this browser. Sign in instead.' }
+
+  const passwordHash = await hashPassword(input.password)
+  const id = `personal-${uuid()}`
+  updateDatabase((database) => {
+    database.users.push({
+      id,
+      accountKind: 'personal',
+      username,
+      name: displayName,
+      displayName,
+      initials: initialsFor(displayName, username),
+      role: 'Student',
+      email: '',
+      schoolId: '',
+      passwordHash,
+      status: 'active',
+      createdAt: new Date().toISOString(),
+    })
+    const user = userDatabaseFrom(database, id)
+    user.profile.displayName = displayName
+    user.personal = { courses: [], sources: [], notes: [] }
+  })
+  const session = signInUser(id, 'personal', 'personal')
+  return session ? { ok: true } : { ok: false, message: 'The account was created but could not be opened.' }
+}
+
+export async function signInPersonal(
+  username: string,
+  password: string,
+): Promise<
+  | { ok: true }
+  | { ok: false; reason: 'locked'; seconds: number }
+  | { ok: false; reason: 'invalid' | 'suspended' }
+> {
+  const locked = signInLockoutSeconds()
+  if (locked > 0) return { ok: false, reason: 'locked', seconds: locked }
+  const normalized = username.trim().toLowerCase()
+  const account = getDatabase().users.find(
+    (user) => user.accountKind === 'personal' && user.username === normalized,
+  )
+  // Derive against a decoy for unknown usernames, for the same reason the
+  // administrator form does: equal timing on both paths.
+  const matched = await verifyPassword(password, account?.passwordHash ?? ENUMERATION_DECOY)
+  if (!account || !account.passwordHash || !matched) {
+    recordSignInFailure()
+    return { ok: false, reason: 'invalid' }
+  }
+  if ((account.status ?? 'active') !== 'active') return { ok: false, reason: 'suspended' }
+  clearSignInFailures()
+  return signInUser(account.id, 'personal', 'personal') ? { ok: true } : { ok: false, reason: 'suspended' }
+}
+
 export function isCurrentUserAdministrator() {
   return hasRole('Admin')
 }
@@ -1467,13 +1575,17 @@ export function signOutCurrentUser() {
   // Remove the durable record rather than writing a signed-out one: an absent
   // key is unambiguous, and there is nothing left for anyone to edit.
   clearDurableAuth()
-  if (account) auditSession('session.signout', userId, account.name, 'Signed out')
+  if (account && account.accountKind !== 'personal')
+    auditSession('session.signout', userId, account.name, 'Signed out')
   updateDatabase((database) => {
     userDatabaseFrom(database, userId).session = session
   })
 }
 
 export function getSignedInHomeRoute() {
+  // Personal accounts have no school curriculum to pick: they land on their
+  // own course list, which is where they create courses.
+  if (isPersonalAccount()) return '/courses'
   const role = getCurrentUserRole()
   if (role === 'Admin') return '/admin/audit'
   if (role === 'Teacher') return '/teacher/class-picture'

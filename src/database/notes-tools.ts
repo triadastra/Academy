@@ -10,6 +10,7 @@
 // Every function is a tool: narrow arguments, a serialisable result, and a
 // refusal instead of a guess when the request is ambiguous. NOTE_TOOLS at the
 // bottom is the manifest to hand an LLM as its tool list.
+import { isPersonalCourseId, personalNotesFor } from './personal'
 import {
   getCurrentUserDatabase,
   getCurrentUserId,
@@ -69,6 +70,9 @@ function revisions(): NoteRevision[] {
  * with no level predates level scoping and stays visible to everyone.
  */
 export function notesForCourse(courseId: string, level?: CourseLevel): UnitNote[] {
+  // A personal course reads only its own private notes — never the school's
+  // shared ones, not even the legacy `*` wildcard rows.
+  if (isPersonalCourseId(courseId)) return personalNotesFor(courseId)
   const resolved = level ?? getCourseLevel(courseId)
   return getDatabase().notes.filter((note) => {
     if (note.courseId !== courseId && note.courseId !== '*') return false

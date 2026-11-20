@@ -8,7 +8,8 @@ import {
   MessageCircle,
 } from 'lucide-react'
 import CourseShell from '@/components/CourseShell'
-import Page, { PageBar, PageBody, SidePanel } from '@/components/Page'
+import Page, { PageAction, PageBar, PageBody, SidePanel } from '@/components/Page'
+import { isPersonalCourseId } from '@/database/personal'
 import NoteDocument from '@/components/NoteDocument'
 import MarkdownText from '@/components/MarkdownText'
 import AskSelection from '@/components/AskSelection'
@@ -38,8 +39,11 @@ export default function Notes() {
   const [, refresh] = useReducer((value) => value + 1, 0)
   useEffect(() => subscribeDatabase(refresh), [])
   const activeCourse = getActiveCourse()
+  // A personal course's notes are the account's own, written from its files:
+  // no shared guide, no contribution queue, no leaderboard.
+  const personal = isPersonalCourseId(activeCourse.id)
   const [params, setParams] = useSearchParams()
-  const tab = ['queue', 'contributions'].includes(params.get('tab') ?? '')
+  const tab = !personal && ['queue', 'contributions'].includes(params.get('tab') ?? '')
     ? params.get('tab')!
     : 'guide'
   const [query, setQuery] = useState('')
@@ -83,9 +87,13 @@ export default function Notes() {
         <PageBar
           context={`${activeCourse.code}${level ? ` · ${level}` : ''} · Course notes`}
         >
-          <ContributeNotesButton onClick={() => setContributeOpen(true)} />
+          {personal ? (
+            <PageAction href="#/course/sources">Add files</PageAction>
+          ) : (
+            <ContributeNotesButton onClick={() => setContributeOpen(true)} />
+          )}
         </PageBar>
-        <nav
+        {personal ? null : <nav
           aria-label="Notes views"
           className="flex shrink-0 gap-1 overflow-x-auto border-b border-rule bg-surface px-4 pt-2 md:px-8"
         >
@@ -109,8 +117,8 @@ export default function Notes() {
               )}
             </button>
           ))}
-        </nav>
-        {contributionSyncError() && (
+        </nav>}
+        {!personal && contributionSyncError() && (
           <div
             role="alert"
             className="flex shrink-0 items-center justify-between gap-3 border-b border-rule bg-amber-50 px-5 py-3 text-xs text-amber-900"
@@ -235,27 +243,35 @@ export default function Notes() {
             <div className="rounded-card border border-dashed border-rule bg-surface px-8 py-16 text-center">
               <BookOpen size={28} className="mx-auto text-board" />
               <h2 className="mt-4 font-serif text-2xl">
-                {loading
+                {personal
+                  ? 'No notes yet'
+                  : loading
                   ? 'Loading the course guide…'
                   : level && otherLevels.length
                     ? `No notes at ${level} level yet`
                     : 'Build the first guide together'}
               </h2>
               <p className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-ink-muted">
-                Contribute your notes to start this course’s shared guide. The
-                agent reviews every packet before it can be published.
+                {personal
+                  ? 'Drop this course’s files into Sources and Syno writes your notes from them.'
+                  : 'Contribute your notes to start this course’s shared guide. The agent reviews every packet before it can be published.'}
               </p>
               <div className="mt-5 flex justify-center">
-                <ContributeNotesButton
-                  onClick={() => setContributeOpen(true)}
-                />
+                {personal ? (
+                  <PageAction variant="primary" href="#/course/sources">Add files</PageAction>
+                ) : (
+                  <ContributeNotesButton
+                    onClick={() => setContributeOpen(true)}
+                  />
+                )}
               </div>
             </div>
           </PageBody>
         )}
         <footer className="shrink-0 border-t border-rule bg-surface px-5 py-2 text-[10px] leading-relaxed text-ink-muted">
-          Shared across the class · All additions and corrections pass agent
-          review · Contribution scores are recorded by the server
+          {personal
+            ? 'Private to you · written by Syno from your own files · stored on this browser'
+            : 'Shared across the class · All additions and corrections pass agent review · Contribution scores are recorded by the server'}
         </footer>
       </Page>
       {contributeOpen && (

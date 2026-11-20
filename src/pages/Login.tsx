@@ -5,7 +5,7 @@
 // it already knows. The administrator form below is the local escape hatch.
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
-import { Building2, CircleHelp, Globe, PlayCircle, LoaderCircle, LockKeyhole, Mail, UserPlus } from 'lucide-react'
+import { ArrowLeft, Briefcase, Building2, CircleHelp, Globe, PlayCircle, LoaderCircle, LockKeyhole, Mail, UserPlus } from 'lucide-react'
 import {
   getSignedInHomeRoute,
   hasSeenAccessGuide,
@@ -15,6 +15,7 @@ import {
   signInLockoutSeconds,
   signInWithLaunchpad,
 } from '@/database/client'
+import PersonalAuth from '@/components/PersonalAuth'
 import { provisionAdministrator } from '@/database/accounts'
 import {
   currentLaunchpadUser,
@@ -27,6 +28,28 @@ import AccessVideo from '@/components/AccessVideo'
 
 /** Which button was pressed, kept across the redirect so the copy can match. */
 const INTENT_KEY = 'synonance:launchpad-intent'
+/** The account type last chosen on this browser, so returning users skip the question. */
+const KIND_KEY = 'synonance:account-kind'
+
+type AccountKind = 'school' | 'personal'
+
+function rememberedKind(): AccountKind | null {
+  try {
+    const value = localStorage.getItem(KIND_KEY)
+    return value === 'school' || value === 'personal' ? value : null
+  } catch {
+    return null
+  }
+}
+
+function rememberKind(kind: AccountKind | null) {
+  try {
+    if (kind) localStorage.setItem(KIND_KEY, kind)
+    else localStorage.removeItem(KIND_KEY)
+  } catch {
+    // Not remembering only means the question is asked again next time.
+  }
+}
 
 export default function Login() {
   const navigate = useNavigate()
@@ -50,11 +73,23 @@ export default function Login() {
   // The walkthrough video comes first (compulsory, but it can be skipped),
   // then the written checklist. Each is remembered separately, so someone who
   // closed the tab mid-guide is not made to face the video again.
-  const [onboarding, setOnboarding] = useState<'video' | 'guide' | null>(() => {
-    if (/[?&]code=/.test(window.location.search + window.location.hash)) return null
+  //
+  // The guide is about getting in through Launchpad, so it belongs to the
+  // school path only: a personal account never sees it.
+  const returningFromLaunchpad = /[?&]code=/.test(window.location.search + window.location.hash)
+  const [kind, setKindState] = useState<AccountKind | null>(() => (returningFromLaunchpad ? 'school' : rememberedKind()))
+  const schoolOnboarding = (): 'video' | 'guide' | null => {
     if (!hasSeenAccessVideo()) return 'video'
     return hasSeenAccessGuide() ? null : 'guide'
-  })
+  }
+  const [onboarding, setOnboarding] = useState<'video' | 'guide' | null>(() =>
+    !returningFromLaunchpad && kind === 'school' ? schoolOnboarding() : null,
+  )
+  function chooseKind(next: AccountKind | null) {
+    setKindState(next)
+    rememberKind(next)
+    setOnboarding(next === 'school' ? schoolOnboarding() : null)
+  }
 
   // Two jobs on mount: find out whether the Launchpad SDK is reachable at all
   // (it only exists on a Launchpad-hosted origin), and finish a sign-in that
@@ -207,7 +242,19 @@ export default function Login() {
           Learn from the course your teacher actually teaches.
         </p>
 
+        {kind === null ? (
+          <AccountChooser onChoose={chooseKind} />
+        ) : kind === 'personal' ? (
+          <PersonalAuth onBack={() => chooseKind(null)} onSignedIn={() => navigate(getSignedInHomeRoute(), { replace: true })} />
+        ) : (
         <div className="mt-8 w-full bg-surface border border-rule rounded-card p-6">
+          <button
+            type="button"
+            onClick={() => chooseKind(null)}
+            className="mb-4 -mt-1 flex items-center gap-1.5 text-[12px] text-ink-muted hover:text-ink transition-colors duration-[120ms] ease-out"
+          >
+            <ArrowLeft size={13} /> School account · change
+          </button>
           {launchpadReady === false ? (
             <div className="rounded-control border border-rule bg-paper px-4 py-3 text-[13px] leading-relaxed text-ink-muted">
               Launchpad sign-in is unavailable on this address. Open Synonance at
@@ -390,12 +437,51 @@ export default function Login() {
             </span>
           </div>
         </div>
+        )}
       </div>
 
       <span className="fixed bottom-3 left-4 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-muted">
         Sign in
       </span>
       <span className="fixed bottom-3 right-4 font-mono text-[10px] text-ink-muted">01 / 24</span>
+    </div>
+  )
+}
+
+function AccountChooser({ onChoose }: { onChoose: (kind: AccountKind) => void }) {
+  const option =
+    'w-full flex items-start gap-3 rounded-card border border-rule bg-surface p-4 text-left hover:border-board hover:bg-board-tint/40 transition-colors duration-[120ms] ease-out'
+  return (
+    <div className="mt-8 w-full">
+      <p className="mb-3 text-center font-mono text-[11px] uppercase tracking-[0.08em] text-ink-muted">
+        How are you using Synonance?
+      </p>
+      <div className="grid gap-2.5">
+        <button type="button" onClick={() => onChoose('school')} className={option}>
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-control bg-board text-paper">
+            <Building2 size={17} />
+          </span>
+          <span>
+            <span className="block text-[15px] font-medium text-ink">School account</span>
+            <span className="mt-0.5 block text-[12px] leading-relaxed text-ink-muted">
+              Sign in through your school with Launchpad, then pick your curriculum. Shared course notes, question bank
+              and mock papers from your teachers.
+            </span>
+          </span>
+        </button>
+        <button type="button" onClick={() => onChoose('personal')} className={option}>
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-control border border-board text-board">
+            <Briefcase size={17} />
+          </span>
+          <span>
+            <span className="block text-[15px] font-medium text-ink">Personal account</span>
+            <span className="mt-0.5 block text-[12px] leading-relaxed text-ink-muted">
+              For your own learning or career. Create your own courses, drop in your files and Syno writes the notes.
+              Your data is yours alone — nothing is shared with a school.
+            </span>
+          </span>
+        </button>
+      </div>
     </div>
   )
 }

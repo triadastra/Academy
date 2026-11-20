@@ -1,6 +1,7 @@
 import { findCatalogCourses } from '@/data/course-catalog'
 import { courses as seededCourses } from '@/data/mock'
-import { getSettings, updateSettings } from '@/database/client'
+import { getSettings, isPersonalAccount, updateSettings } from '@/database/client'
+import { getPersonalWorkspace } from '@/database/personal'
 
 export interface ActiveCourse {
   id: string
@@ -36,7 +37,33 @@ function courseSymbol(code: string) {
   return code.charAt(0)
 }
 
+/** Shown in the rail before a personal account has created any course. */
+const NO_COURSE: ActiveCourse = {
+  id: '',
+  code: 'NEW',
+  title: 'No course yet',
+  context: 'Create one to begin',
+  symbol: '+',
+  subject: '',
+  displayName: 'No course yet',
+}
+
 export function getAvailableCourses(): ActiveCourse[] {
+  // Personal accounts see only the courses they built — never the school's
+  // catalogue, nor the seeded demo courses.
+  if (isPersonalAccount()) {
+    return getPersonalWorkspace().courses.map((course) => ({
+      id: course.id,
+      code: course.code,
+      title: course.title,
+      context: `Personal · ${course.rigor}`,
+      symbol: course.title.trim().charAt(0).toUpperCase() || '·',
+      // Namespaced so subject-scoped shared material (question bank, mock
+      // papers) never matches a personal course.
+      subject: `personal:${course.subject}`,
+      displayName: course.title,
+    }))
+  }
   try {
     const settings = getSettings()
     const savedIds = settings.selectedCourseIds
@@ -79,7 +106,7 @@ export function getAvailableCourses(): ActiveCourse[] {
 export function getActiveCourse(): ActiveCourse {
   const available = getAvailableCourses()
   const activeId = getSettings().activeCourseId
-  return available.find((course) => course.id === activeId) ?? available[0]
+  return available.find((course) => course.id === activeId) ?? available[0] ?? NO_COURSE
 }
 
 export function setActiveCourse(courseId: string) {

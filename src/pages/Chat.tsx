@@ -29,6 +29,7 @@ import {
   appendChatMessage,
   consumePendingChatPrompt,
   getCurrentUser,
+  isPersonalAccount,
   subscribeDatabase,
   upsertChatMessage,
 } from '@/database/client'
@@ -188,7 +189,7 @@ export default function Chat() {
         ]
       : []
     return [
-      `You are Syno, a tutor for ${activeCourse.code} — ${activeCourse.title} at SHSID.`,
+      `You are Syno, a tutor for ${activeCourse.code} — ${activeCourse.title}${isPersonalAccount() ? '' : ' at SHSID'}.`,
       ...focus,
       'Teach the method; build understanding step by step rather than just stating answers.',
       'Prefer the course notes below over your own recollection. If they do not cover',
@@ -198,6 +199,10 @@ export default function Chat() {
       'You have tools. Search the notes before answering a subject question, and',
       'read the student’s memory (memory_read) before giving study advice, so it',
       'fits how this student actually learns.',
+      'When they ask how they are doing or what they are good or bad at, read',
+      'performance_get, summarise strengths and weaknesses with the evidence, and',
+      'record per-topic fluency with fluency_update so their dashboard reflects it.',
+      'Do the same after you have checked their understanding of a topic.',
       '',
       'The shared agent retrieves course notes before generating a reply; use that evidence and read further with tools when needed.',
     ].join('\n')

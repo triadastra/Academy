@@ -351,8 +351,19 @@ export type UserRole = 'Student' | 'Teacher' | 'Admin'
  */
 export type AccountStatus = 'active' | 'suspended' | 'erased'
 
+/**
+ * School accounts sign in through Launchpad and read the institution's shared
+ * course material. Personal accounts are private to this browser: they build
+ * their own courses and never see, or write to, anything the school shares.
+ */
+export type AccountKind = 'school' | 'personal'
+
 export interface ApplicationUser {
   id: string
+  /** Absent means a school account — every row written before this existed. */
+  accountKind?: AccountKind
+  /** Personal accounts sign in with this instead of a school email. */
+  username?: string
   name: string
   initials: string
   role: UserRole
@@ -498,7 +509,7 @@ export interface AuthSession {
   authenticated: boolean
   institutionId: string
   /** Launchpad sessions may read institution content; local-admin sessions may not. */
-  identityProvider?: 'launchpad' | 'local-admin'
+  identityProvider?: 'launchpad' | 'local-admin' | 'personal'
   signedInAt: string | null
   lastSeenAt: string | null
   /** Absolute end of the session, ISO. */
@@ -548,6 +559,118 @@ export interface UserDatabase {
    * database written before notifications existed, and reads as "none read".
    */
   notificationReads?: string[]
+  /**
+   * The student's own grade book, study log and projections — see
+   * src/database/performance.ts. Optional, so a database written before the
+   * tracker existed reads as an empty record without a schema bump.
+   */
+  performance?: PerformanceRecord
+  /**
+   * A personal account's private workspace: courses it created, the files it
+   * dropped in, and the notes the agent wrote from them. Never present on a
+   * school account. See src/database/personal.ts.
+   */
+  personal?: PersonalWorkspace
+}
+
+// ── Performance tracking ──────────────────────────────────────────────────
+
+/** Per-course settings the grade and GPA maths need. */
+export interface PerformanceCourseSettings {
+  courseId: string
+  /** Credit hours / units; the GPA weight of this course. */
+  credits: number
+  /** Added to grade points for weighted GPA (Honors 0.5, AP/IB 1.0). */
+  gpaBoost: number
+  /** Target final percentage. */
+  target: number
+  /** Minutes per week the student plans to study; drives the projection. */
+  plannedMinutesPerWeek: number | null
+}
+
+export interface PerformanceAssessment {
+  id: string
+  courseId: string
+  title: string
+  category: string
+  /** Local calendar date, `YYYY-MM-DD`. */
+  date: string
+  /** Share of the final course grade, in percent. 0 = tracked but not graded. */
+  weight: number
+  /** Marks earned; null while the assessment is still upcoming. */
+  score: number | null
+  total: number
+}
+
+export interface StudySession {
+  id: string
+  courseId: string
+  /** `YYYY-MM-DD` */
+  date: string
+  minutes: number
+  note?: string
+}
+
+/**
+ * How fluent the student is in one topic, as judged by Syno from a
+ * conversation (or set by hand). Shown on the dashboard and fed into the
+ * knowledge curve as light evidence.
+ */
+export interface FluencyRating {
+  id: string
+  courseId: string
+  /** Topic in the student's words or the note title. */
+  topic: string
+  noteCode?: string
+  /** 0–100. */
+  score: number
+  /** One line of evidence: what the student said or did that shows it. */
+  evidence: string
+  source: 'chat' | 'manual'
+  /** ISO instant. */
+  at: string
+}
+
+export interface PerformanceRecord {
+  courses: Record<string, PerformanceCourseSettings>
+  assessments: PerformanceAssessment[]
+  sessions: StudySession[]
+  /** Latest rating per course + topic. Optional: absent on older records. */
+  fluency?: FluencyRating[]
+  /** Last review written by the model, kept so the page reopens with it. */
+  coach?: { at: string; text: string }
+}
+
+// ── Personal accounts ─────────────────────────────────────────────────────
+
+export interface PersonalCourse {
+  id: string
+  code: string
+  title: string
+  subject: string
+  description: string
+  /** Rigour, which also sets the default GPA boost. */
+  rigor: 'Regular' | 'Honors' | 'AP/IB'
+  createdAt: string
+}
+
+/** A file dropped into a personal course. Its text lives in IndexedDB. */
+export interface PersonalSource {
+  id: string
+  courseId: string
+  name: string
+  bytes: number
+  chars: number
+  addedAt: string
+  /** When the agent last wrote notes that read this file. */
+  usedAt?: string
+}
+
+export interface PersonalWorkspace {
+  courses: PersonalCourse[]
+  sources: PersonalSource[]
+  /** Agent-written notes. Same shape as shared notes so every reader works. */
+  notes: UnitNote[]
 }
 
 export interface SynonanceDatabase {
