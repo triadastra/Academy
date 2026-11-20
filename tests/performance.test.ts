@@ -12,6 +12,7 @@ import {
   summariseGrade,
   type KnowledgeEvent,
 } from '../src/lib/performance-model'
+import { parseDate, parseImport, parseMinutes, parseRubric, parseScore, parseWeight, rubricWeights } from '../src/lib/performance-import'
 
 const close = (actual: number | null, expected: number, epsilon = 1e-6, message?: string) => {
   assert.ok(actual !== null, message ?? 'expected a number, got null')
@@ -140,6 +141,101 @@ const close = (actual: number | null, expected: number, epsilon = 1e-6, message?
     today,
   )
   close(pace, 30, 1e-9, '120 minutes over 4 weeks')
+}
+
+// ── paste import ──────────────────────────────────────────────────────────
+{
+  const today = '2026-11-20'
+  assert.equal(parseDate('2026-09-26', today), '2026-09-26')
+  assert.equal(parseDate('2026/9/6', today), '2026-09-06')
+  assert.equal(parseDate('9/26/2026', today), '2026-09-26')
+  assert.equal(parseDate('Sep 26', today), '2026-09-26')
+  assert.equal(parseDate('Jan 15', today), '2027-01-15', 'a yearless date takes the nearest year')
+  assert.equal(parseDate('26 September 2026', today), '2026-09-26')
+  assert.equal(parseDate('Oct 3rd', today), '2026-10-03')
+  assert.equal(parseDate('2026-02-30', today), null, 'impossible dates are refused')
+  assert.equal(parseDate('soon', today), null)
+
+  assert.deepEqual(parseScore('76/100'), { score: 76, total: 100 })
+  assert.deepEqual(parseScore('9 out of 10'), { score: 9, total: 10 })
+  assert.deepEqual(parseScore('88%'), { score: 88, total: 100 })
+  assert.deepEqual(parseScore(''), { score: null, total: 100 })
+  assert.deepEqual(parseScore('upcoming'), { score: null, total: 100 })
+  assert.equal(parseScore('abc'), null)
+  assert.equal(parseScore('50/0'), null)
+
+  assert.equal(parseWeight('15%'), 15)
+  assert.equal(parseWeight('0.15'), 15, 'a bare fraction is a share')
+  assert.equal(parseWeight(''), 0)
+  assert.equal(parseWeight('150%'), null)
+
+  assert.equal(parseMinutes('45'), 45)
+  assert.equal(parseMinutes('45 min'), 45)
+  assert.equal(parseMinutes('1h 30m'), 90)
+  assert.equal(parseMinutes('1.5h'), 90)
+  assert.equal(parseMinutes('0'), null)
+
+  const result = parseImport(
+    [
+      'Name\tType\tDate\tWeight\tScore',
+      'Unit test 1\tTest\t2026-09-26\t15%\t76/100',
+      'Quiz 3, Quizzes, Oct 30, 5%, 9/10',
+      'Final exam, 2027-01-15, 40%,',
+      'study, 2026-11-18, 45 min, past paper, chapter 4',
+      'Broken row, Test, someday, 10%, 80',
+      '# a comment',
+      '',
+    ].join('\n'),
+    today,
+  )
+  assert.equal(result.skipped, 1, 'header skipped')
+  assert.equal(result.rows.length, 4)
+  assert.deepEqual(result.rows[0], { kind: 'assessment', title: 'Unit test 1', category: 'Test', date: '2026-09-26', weight: 15, score: 76, total: 100 })
+  assert.equal(result.rows[1].kind === 'assessment' && result.rows[1].category, 'Quiz', 'category names are normalised')
+  assert.deepEqual(result.rows[2], { kind: 'assessment', title: 'Final exam', category: 'Final exam', date: '2027-01-15', weight: 40, score: null, total: 100 })
+  assert.deepEqual(result.rows[3], { kind: 'study', date: '2026-11-18', minutes: 45, note: 'past paper, chapter 4' })
+  assert.equal(result.problems.length, 1)
+  assert.equal(result.problems[0].line, 6)
+}
+
+// Spreadsheet copies keep empty trailing cells as trailing tabs.
+{
+  const today = '2026-11-20'
+  const sheet = parseImport('Unit test 3\tTest\tDec 4\t\t\nFinal exam\tFinal\t2027-01-15\t\t\nEssay 1\tOct 1\t10%\t17/20', today)
+  assert.deepEqual(sheet.problems, [])
+  assert.deepEqual(sheet.rows[0], { kind: 'assessment', title: 'Unit test 3', category: 'Test', date: '2026-12-04', weight: 0, score: null, total: 100 })
+  assert.deepEqual(sheet.rows[1], { kind: 'assessment', title: 'Final exam', category: 'Final exam', date: '2027-01-15', weight: 0, score: null, total: 100 })
+  assert.deepEqual(sheet.rows[2], { kind: 'assessment', title: 'Essay 1', category: 'Essay', date: '2026-10-01', weight: 10, score: 17, total: 20 })
+  // Name and date alone is an upcoming item with no weight yet.
+  assert.equal(parseImport('Project 2, 2026-12-10', today).rows.length, 1)
+  assert.match(parseImport('Field trip\tOther\tsometime\t5%\t10', today).problems[0].reason, /"sometime"/)
+}
+
+// ── rubric ────────────────────────────────────────────────────────────────
+{
+  const { entries, problems } = parseRubric('Tests 50% (4), Quizzes 20%, Homework 15%, Final 15%')
+  assert.deepEqual(problems, [])
+  assert.deepEqual(entries, [
+    { category: 'Test', weight: 50, count: 4 },
+    { category: 'Quiz', weight: 20 },
+    { category: 'Homework', weight: 15 },
+    { category: 'Final exam', weight: 15 },
+  ])
+  assert.equal(parseRubric('Midterm 20%, Final exam 20%, Tests 60%').entries.length, 3, 'midterm and final stay separate')
+  assert.match(parseRubric('Tests 50%, Quizzes 20%').problems[0], /70%/)
+  assert.deepEqual(parseRubric('4 tests 40%\nQuiz 60').entries[0], { category: 'Test', weight: 40, count: 4 })
+
+  const items = [
+    { id: 't1', category: 'Test', weight: 0 },
+    { id: 't2', category: 'tests', weight: 99 },
+    { id: 'q1', category: 'Quiz', weight: 0 },
+    { id: 'p1', category: 'Project', weight: 12 },
+  ]
+  const weights = rubricWeights(items, entries)
+  assert.equal(weights.get('t1'), 12.5, 'Tests 50% over an expected 4 items, though only 2 are recorded')
+  assert.equal(weights.get('t2'), 12.5)
+  assert.equal(weights.get('q1'), 20, 'one quiz so far carries the whole category')
+  assert.equal(weights.has('p1'), false, 'categories outside the rubric keep their own weight')
 }
 
 console.log('performance model: all checks passed')

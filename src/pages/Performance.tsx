@@ -25,6 +25,8 @@ import {
 import {
   BookOpenCheck,
   CircleAlert,
+  ClipboardPaste,
+  Eraser,
   CircleCheck,
   CircleDot,
   Clock3,
@@ -46,7 +48,12 @@ import { findCatalogCourses } from '@/data/course-catalog'
 import { getPersonalWorkspace, isPersonalCourseId, RIGOR_BOOST } from '@/database/personal'
 import {
   activityFor,
+  clearSampleData,
   courseSettings,
+  importRecords,
+  rubricFor,
+  sampleCounts,
+  setRubric,
   deleteAssessment,
   deleteFluency,
   deleteStudySession,
@@ -76,6 +83,7 @@ import {
   type Projection,
 } from '@/lib/performance-model'
 import { coachErrorMessage, reviewPerformance, type CoachInput } from '@/lib/performance-coach'
+import { normaliseCategory, parseImport, parseRubric } from '@/lib/performance-import'
 import { useToast } from '@/hooks/use-toast'
 
 // Categorical slots, in fixed order (validated set: see the dataviz palette).
@@ -90,6 +98,7 @@ const CATEGORIES = ['Test', 'Quiz', 'Exam', 'Homework', 'Project', 'Lab', 'Essay
 
 const fmtPct = (value: number | null | undefined, digits = 1) =>
   value === null || value === undefined || Number.isNaN(value) ? '—' : `${value.toFixed(digits)}%`
+const fmtShare = (value: number) => `${Math.round(value * 10) / 10}%`
 const fmtGpa = (value: number | null | undefined) =>
   value === null || value === undefined ? '—' : value.toFixed(2)
 const shortDate = (date: string) =>
@@ -170,6 +179,9 @@ export default function Performance() {
   const [focusId, setFocusId] = useState<string>(() => getActiveCourse().id || 'all')
   const focus = views.find((view) => view.course.id === focusId) ?? null
   const { toast, notice, show, fail } = useToast()
+  const [importing, setImporting] = useState(false)
+  const [confirmClear, setConfirmClear] = useState(false)
+  const samples = sampleCounts()
 
   const gpaNow = computeGpa(views.map((view) => ({ pct: view.grade.current, credits: view.settings.credits, boost: view.settings.gpaBoost })))
   const gpaProjected = computeGpa(views.map((view) => ({ pct: view.grade.projected, credits: view.settings.credits, boost: view.settings.gpaBoost })))
@@ -219,15 +231,54 @@ export default function Performance() {
             <PageAction
               onClick={() => {
                 loadSampleTerm(views.map((view) => view.course.id), today)
-                show('Sample term loaded — edit or delete any of it.')
+                show('Sample term loaded — remove it any time with "Remove sample data".')
               }}
             >
               Load a sample term
             </PageAction>
           ) : null}
+          {samples.assessments + samples.sessions > 0 ? (
+            confirmClear ? (
+              <>
+                <span className="text-[12px] text-mark">
+                  Remove {samples.assessments} sample grades and {samples.sessions} sample sessions?
+                </span>
+                <PageAction
+                  variant="destructive"
+                  onClick={() => {
+                    clearSampleData()
+                    setConfirmClear(false)
+                    show('Sample data removed. Everything you entered is still there.')
+                  }}
+                >
+                  Remove
+                </PageAction>
+                <PageAction onClick={() => setConfirmClear(false)}>Keep</PageAction>
+              </>
+            ) : (
+              <PageAction variant="danger" onClick={() => setConfirmClear(true)}>
+                <Eraser size={14} /> Remove sample data
+              </PageAction>
+            )
+          ) : null}
+          <PageAction variant={importing ? 'primary' : 'secondary'} onClick={() => setImporting((open) => !open)}>
+            <ClipboardPaste size={14} /> Paste grades
+          </PageAction>
         </PageBar>
         <PageBody measure="wide">
           {notice ? <PageNotice className="mb-4">{notice}</PageNotice> : null}
+          {importing ? (
+            <ImportPanel
+              views={views}
+              defaultCourseId={focus?.course.id ?? views[0]?.course.id ?? ''}
+              today={today}
+              onClose={() => setImporting(false)}
+              onImported={(message) => {
+                show(message)
+                setImporting(false)
+              }}
+            />
+          ) : null}
 
           <section aria-label="Summary" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <StatTile
@@ -679,6 +730,7 @@ function CourseDetail({
     .sessions.filter((session) => session.courseId === course.id)
     .sort((a, b) => b.date.localeCompare(a.date))
   const practice30 = view.activity.practice.filter((day) => dayIndex(day.date) > dayIndex(today) - 30)
+  const governed = new Set(rubricFor(course.id).map((entry) => entry.category))
 
   const [draft, setDraft] = useState({ title: '', category: 'Test', date: today, weight: '10', score: '', total: '100' })
   const [study, setStudy] = useState({ date: today, minutes: '45', note: '' })
@@ -709,7 +761,10 @@ function CourseDetail({
       <div className="flex flex-col gap-1 border-b border-rule px-5 py-4 sm:flex-row sm:items-end sm:justify-between">
         <h2 className="font-serif text-[22px] text-ink">{course.displayName}</h2>
         <p className="text-[12px] text-ink-muted">
-          {Math.round(view.grade.completed * 100)}% of the grade is in · {view.grade.remainingWeight}% still to come
+          {fmtShare(view.grade.gradedWeight)} of the grade is in · {fmtShare(view.grade.remainingWeight)} still to come
+          {view.grade.gradedWeight + view.grade.remainingWeight < 99.5
+            ? ` · ${fmtShare(100 - view.grade.gradedWeight - view.grade.remainingWeight)} not entered yet`
+            : ''}
         </p>
       </div>
 
@@ -760,6 +815,8 @@ function CourseDetail({
         </label>
       </div>
 
+      <RubricPanel courseId={course.id} boost={boost} onSaved={onSaved} onError={onError} />
+
       <FluencyPanel courseId={course.id} onError={onError} />
 
       {/* Assessments */}
@@ -782,7 +839,7 @@ function CourseDetail({
             </thead>
             <tbody className="divide-y divide-rule">
               {view.assessments.map((item) => (
-                <AssessmentRow key={item.id} item={item} />
+                <AssessmentRow key={item.id} item={item} governed={governed.has(normaliseCategory(item.category))} />
               ))}
               {view.activity.mockPapers.map((paper) => (
                 <tr key={paper.id} className="text-ink-muted">
@@ -949,7 +1006,7 @@ function NumberSetting({
   )
 }
 
-function AssessmentRow({ item }: { item: PerformanceAssessment }) {
+function AssessmentRow({ item, governed }: { item: PerformanceAssessment; governed: boolean }) {
   const [score, setScore] = useState(item.score === null ? '' : String(item.score))
   const [weight, setWeight] = useState(String(item.weight))
   useEffect(() => setScore(item.score === null ? '' : String(item.score)), [item.score])
@@ -974,6 +1031,11 @@ function AssessmentRow({ item }: { item: PerformanceAssessment }) {
       </td>
       <td className="py-1.5 pr-3 text-ink-muted">{item.category}</td>
       <td className="py-1.5 pr-3 text-right">
+        {governed ? (
+          <span className="tabular-nums text-ink" title="Set by the course rubric">
+            {item.weight}% <span className="text-[10px] text-ink-muted">rubric</span>
+          </span>
+        ) : <>
         <input
           aria-label={`Weight of ${item.title}`}
           inputMode="decimal"
@@ -983,6 +1045,7 @@ function AssessmentRow({ item }: { item: PerformanceAssessment }) {
           onBlur={commit}
         />
         %
+        </>}
       </td>
       <td className="py-1.5 pr-3 text-right tabular-nums">
         <input
@@ -1003,6 +1066,240 @@ function AssessmentRow({ item }: { item: PerformanceAssessment }) {
         </button>
       </td>
     </tr>
+  )
+}
+
+// ── Paste import ───────────────────────────────────────────────────────────
+
+const EXAMPLE = `Unit test 1, Test, 2026-09-26, 15%, 76/100
+Quiz 3, Quiz, Oct 30, 5%, 9/10
+Final exam, Final exam, 2027-01-15, 40%,
+study, 2026-11-18, 45 min, past paper`
+
+function ImportPanel({
+  views,
+  defaultCourseId,
+  today,
+  onClose,
+  onImported,
+}: {
+  views: CourseView[]
+  defaultCourseId: string
+  today: string
+  onClose: () => void
+  onImported: (message: string) => void
+}) {
+  const navigate = useNavigate()
+  const [courseId, setCourseId] = useState(defaultCourseId)
+  const [text, setText] = useState('')
+  const parsed = useMemo(() => parseImport(text, today), [text, today])
+  const assessments = parsed.rows.filter((row) => row.kind === 'assessment')
+  const sessions = parsed.rows.filter((row) => row.kind === 'study')
+  const course = views.find((view) => view.course.id === courseId)?.course
+
+  function run() {
+    if (!courseId || parsed.rows.length === 0) return
+    const result = importRecords(courseId, parsed.rows)
+    const parts = [
+      result.added ? `${result.added} added` : '',
+      result.updated ? `${result.updated} updated` : '',
+      result.skipped ? `${result.skipped} already there` : '',
+    ].filter(Boolean)
+    onImported(`${course?.displayName ?? 'Course'}: ${parts.join(', ') || 'nothing new'}.`)
+  }
+
+  function askSyno() {
+    setActiveCourse(courseId)
+    updateSettings({
+      pendingChatPrompt:
+        'I want to give you my scores and my course rubric so you can fill in my Performance dashboard. Here they are:\n\n',
+    })
+    navigate('/course/chat')
+  }
+
+  return (
+    <section className="mb-6 rounded-card border border-board/30 bg-surface p-5" aria-label="Paste grades">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="font-serif text-[22px] text-ink">Paste your grades</h2>
+          <p className="mt-1 max-w-[62ch] text-[13px] leading-relaxed text-ink-muted">
+            One per line: <span className="font-mono text-[12px] text-ink">name, type, date, weight, score</span>. Copy straight
+            from a spreadsheet or your school portal — tabs work too. Leave the score empty for something coming up. Study time:{' '}
+            <span className="font-mono text-[12px] text-ink">study, date, minutes, note</span>.
+          </p>
+        </div>
+        <label className="grid shrink-0 gap-1 text-[12px] text-ink-muted">
+          Into course
+          <select className={input} value={courseId} onChange={(event) => setCourseId(event.target.value)}>
+            {views.map((view) => (
+              <option key={view.course.id} value={view.course.id}>
+                {view.course.displayName}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <textarea
+        aria-label="Grades to import"
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+        placeholder={EXAMPLE}
+        spellCheck={false}
+        className="mt-3 min-h-[140px] w-full rounded-control border border-rule bg-paper/40 px-3 py-2 font-mono text-[12px] leading-relaxed text-ink focus:border-board focus:outline-none"
+      />
+
+      {parsed.rows.length || parsed.problems.length ? (
+        <div className="mt-3 grid gap-3 lg:grid-cols-[1.4fr_1fr]">
+          <div className="overflow-x-auto rounded-control border border-rule">
+            <table className="w-full min-w-[480px] text-left text-[12px]">
+              <thead className="bg-paper/60 font-mono text-[10px] uppercase tracking-[0.06em] text-ink-muted">
+                <tr>
+                  <th className="px-3 py-1.5 font-normal">Date</th>
+                  <th className="px-3 py-1.5 font-normal">What</th>
+                  <th className="px-3 py-1.5 font-normal">Type</th>
+                  <th className="px-3 py-1.5 font-normal text-right">Weight</th>
+                  <th className="px-3 py-1.5 font-normal text-right">Score</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-rule">
+                {parsed.rows.map((row, index) =>
+                  row.kind === 'assessment' ? (
+                    <tr key={index}>
+                      <td className="px-3 py-1.5 tabular-nums text-ink-muted">{shortDate(row.date)}</td>
+                      <td className="px-3 py-1.5 text-ink">{row.title}</td>
+                      <td className="px-3 py-1.5 text-ink-muted">{row.category}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums">{row.weight}%</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums">
+                        {row.score === null ? <span className="text-ink-muted">upcoming</span> : `${row.score}/${row.total}`}
+                      </td>
+                    </tr>
+                  ) : (
+                    <tr key={index}>
+                      <td className="px-3 py-1.5 tabular-nums text-ink-muted">{shortDate(row.date)}</td>
+                      <td className="px-3 py-1.5 text-ink">{row.note ?? 'Study'}</td>
+                      <td className="px-3 py-1.5 text-ink-muted">Study</td>
+                      <td className="px-3 py-1.5 text-right" />
+                      <td className="px-3 py-1.5 text-right tabular-nums">{row.minutes} min</td>
+                    </tr>
+                  ),
+                )}
+              </tbody>
+            </table>
+          </div>
+          <div className="text-[12px]">
+            <p className="text-ink">
+              Ready: {assessments.length} grade{assessments.length === 1 ? '' : 's'}, {sessions.length} study session
+              {sessions.length === 1 ? '' : 's'}
+              {parsed.skipped ? ` · header skipped` : ''}
+            </p>
+            {assessments.some((row) => row.kind === 'assessment' && row.weight === 0) ? (
+              <p className="mt-1 text-ink-muted">Rows with no weight are tracked but do not count toward the grade until a weight or a rubric is set.</p>
+            ) : null}
+            {parsed.problems.length ? (
+              <ul className="mt-2 grid gap-1 text-mark" role="alert">
+                {parsed.problems.map((problem) => (
+                  <li key={problem.line}>
+                    Line {problem.line}: {problem.reason}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            <p className="mt-2 text-ink-muted">Re-pasting is safe: a grade with the same name and date is updated, not duplicated.</p>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <PageAction variant="primary" onClick={run} disabled={parsed.rows.length === 0 || !courseId}>
+          Import {parsed.rows.length || ''} row{parsed.rows.length === 1 ? '' : 's'}
+        </PageAction>
+        <PageAction onClick={onClose}>Cancel</PageAction>
+        <button type="button" onClick={askSyno} className="ml-auto flex items-center gap-1.5 text-[12px] text-board hover:text-board-deep">
+          <MessageSquare size={13} /> Or just tell Syno your scores and rubric in Chat
+        </button>
+      </div>
+    </section>
+  )
+}
+
+// ── Rubric ─────────────────────────────────────────────────────────────────
+
+function RubricPanel({
+  courseId,
+  boost,
+  onSaved,
+  onError,
+}: {
+  courseId: string
+  boost: number
+  onSaved: (message: string) => void
+  onError: (message: string) => void
+}) {
+  const rubric = rubricFor(courseId)
+  const [editing, setEditing] = useState(false)
+  const [text, setText] = useState('')
+  const total = rubric.reduce((sum, entry) => sum + entry.weight, 0)
+
+  function save() {
+    const { entries, problems } = parseRubric(text)
+    if (entries.length === 0) return onError(problems[0] ?? 'Write it like: Tests 50%, Quizzes 20%, Homework 15%, Final exam 15%')
+    setRubric(courseId, entries, boost)
+    setEditing(false)
+    onSaved(problems.length ? `Rubric saved. ${problems.join(' ')}` : 'Rubric saved. Weights now follow it.')
+  }
+
+  return (
+    <div className="border-b border-rule px-5 py-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <h3 className="flex items-center gap-2 text-[14px] font-medium text-ink">
+          <GraduationCap size={15} className="text-board" /> Grading rubric
+        </h3>
+        <div className="flex gap-2">
+          {rubric.length && !editing ? (
+            <PageAction onClick={() => { setRubric(courseId, null, boost); onSaved('Rubric removed. Weights are yours to set again.') }}>
+              Remove
+            </PageAction>
+          ) : null}
+          <PageAction
+            onClick={() => {
+              setText(rubric.map((entry) => `${entry.category} ${entry.weight}%${entry.count ? ` (${entry.count})` : ''}`).join(', '))
+              setEditing((open) => !open)
+            }}
+          >
+            {rubric.length ? 'Edit' : 'Set rubric'}
+          </PageAction>
+        </div>
+      </div>
+      {editing ? (
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end">
+          <label className="grid flex-1 gap-1 text-[11px] text-ink-muted">
+            Categories and weights — add a count in brackets when you know it
+            <input
+              className={input}
+              value={text}
+              onChange={(event) => setText(event.target.value)}
+              placeholder="Tests 50% (4), Quizzes 20%, Homework 15%, Final exam 15%"
+              onKeyDown={(event) => { if (event.key === 'Enter') save() }}
+            />
+          </label>
+          <PageAction variant="primary" onClick={save}>Save rubric</PageAction>
+        </div>
+      ) : rubric.length ? (
+        <ul className="mt-3 flex flex-wrap gap-2 text-[12px]">
+          {rubric.map((entry) => (
+            <li key={entry.category} className="rounded-chip border border-rule bg-paper/50 px-2 py-1 text-ink">
+              {entry.category} <span className="tabular-nums text-ink-muted">{entry.weight}%{entry.count ? ` · ${entry.count} items` : ''}</span>
+            </li>
+          ))}
+          {Math.abs(total - 100) > 0.5 ? <li className="px-1 py-1 text-mark">adds up to {total}%, not 100%</li> : null}
+        </ul>
+      ) : (
+        <p className="mt-2 text-[13px] text-ink-muted">
+          No rubric yet, so each assessment carries the weight you give it. Set one (or tell Syno your syllabus in Chat) and
+          each category's weight is split across its assessments for you.
+        </p>
+      )}
+    </div>
   )
 }
 

@@ -11,6 +11,7 @@
 // in by `activityFor`, rather than copied, so there is one source of truth for
 // each.
 import { getCurrentUserDatabase, getCurrentUserId, updateDatabase } from '@/database/client'
+import { normaliseCategory, rubricWeights, type ImportRow, type RubricEntry } from '@/lib/performance-import'
 import type {
   FluencyRating,
   PerformanceAssessment,
@@ -54,7 +55,39 @@ function mutate(change: (record: PerformanceRecord) => void) {
     user.performance.assessments ??= []
     user.performance.sessions ??= []
     change(user.performance)
+    applyRubrics(user.performance)
   })
+}
+
+/**
+ * Keep every rubric-governed weight in step with its rubric. Runs after every
+ * change, so adding, deleting or importing an assessment re-splits its
+ * category without each caller having to remember to.
+ */
+function applyRubrics(record: PerformanceRecord) {
+  for (const settings of Object.values(record.courses)) {
+    if (!settings.rubric?.length) continue
+    const items = record.assessments.filter((item) => item.courseId === settings.courseId)
+    const weights = rubricWeights(items, settings.rubric)
+    for (const item of items) {
+      const weight = weights.get(item.id)
+      if (weight !== undefined) item.weight = weight
+    }
+  }
+}
+
+/** Set (or, with null, remove) the course's grading rubric. */
+export function setRubric(courseId: string, rubric: RubricEntry[] | null, gpaBoost = 0) {
+  mutate((record) => {
+    const current = { ...defaultCourseSettings(courseId, gpaBoost), ...record.courses[courseId], courseId }
+    if (rubric && rubric.length) current.rubric = rubric.map((entry) => ({ ...entry, category: normaliseCategory(entry.category) }))
+    else delete current.rubric
+    record.courses[courseId] = current
+  })
+}
+
+export function rubricFor(courseId: string): RubricEntry[] {
+  return getPerformance().courses[courseId]?.rubric ?? []
 }
 
 export function defaultCourseSettings(courseId: string, gpaBoost = 0): PerformanceCourseSettings {
@@ -199,6 +232,7 @@ export function loadSampleTerm(courseIds: string[], today = localDate()) {
         const drift = courseIndex % 2 === 0 ? offset / 20 : -offset / 25
         const score = offset <= 0 ? Math.round(Math.min(100, Math.max(45, skill + drift + (random() - 0.5) * 12))) : null
         record.assessments.push({
+          sample: true,
           id: `assessment-${uuid()}`,
           courseId,
           title,
@@ -215,6 +249,7 @@ export function loadSampleTerm(courseIds: string[], today = localDate()) {
         const fading = courseIndex % 3 === 2 && offset > -25
         if (!fading && random() < diligence * 0.45) {
           record.sessions.push({
+            sample: true,
             id: `study-${uuid()}`,
             courseId,
             date: day(offset),
@@ -347,6 +382,12 @@ export function courseSnapshot(courseId: string, today = localDate()) {
       correct: recentPractice.reduce((sum, day) => sum + day.correct, 0),
     },
     mockPapers: activity.mockPapers.slice(-5).map((paper) => ({ title: paper.title, date: paper.date, pct: Math.round(paper.pct) })),
+    rubric: rubricFor(courseId).map((entry) => ({
+      category: entry.category,
+      weightPct: entry.weight,
+      expectedCount: entry.count ?? null,
+      recorded: assessments.filter((item) => normaliseCategory(item.category) === entry.category).length,
+    })),
     fluency: fluencyFor(courseId).map((rating) => ({
       topic: rating.topic,
       noteCode: rating.noteCode ?? null,
@@ -357,4 +398,77 @@ export function courseSnapshot(courseId: string, today = localDate()) {
       at: rating.at,
     })),
   }
+}
+
+// ── Sample data and bulk import ───────────────────────────────────────────
+
+export function sampleCounts() {
+  const record = getPerformance()
+  return {
+    assessments: record.assessments.filter((item) => item.sample).length,
+    sessions: record.sessions.filter((item) => item.sample).length,
+  }
+}
+
+/** Remove everything "Load a sample term" created, and nothing the student entered. */
+export function clearSampleData() {
+  mutate((record) => {
+    record.assessments = record.assessments.filter((item) => !item.sample)
+    record.sessions = record.sessions.filter((item) => !item.sample)
+  })
+}
+
+const sameTitle = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase()
+
+/**
+ * Add pasted rows to one course. An assessment with the same name and date as
+ * one already there is updated rather than duplicated, so pasting the same
+ * list twice (say, after a new score comes in) is safe. Study sessions are
+ * only skipped when an identical one (date, minutes, note) already exists.
+ */
+export function importRecords(courseId: string, rows: ImportRow[]) {
+  let added = 0
+  let updated = 0
+  let skipped = 0
+  mutate((record) => {
+    for (const row of rows) {
+      if (row.kind === 'assessment') {
+        const existing = record.assessments.find(
+          (item) => item.courseId === courseId && item.date === row.date && sameTitle(item.title, row.title),
+        )
+        if (existing) {
+          Object.assign(existing, { category: row.category, weight: row.weight, score: row.score, total: row.total })
+          delete existing.sample
+          updated += 1
+        } else {
+          record.assessments.push({
+            id: `assessment-${uuid()}`,
+            courseId,
+            title: row.title,
+            category: row.category,
+            date: row.date,
+            weight: row.weight,
+            score: row.score,
+            total: row.total,
+          })
+          added += 1
+        }
+      } else {
+        const duplicate = record.sessions.some(
+          (item) =>
+            item.courseId === courseId &&
+            item.date === row.date &&
+            item.minutes === row.minutes &&
+            (item.note ?? '') === (row.note ?? ''),
+        )
+        if (duplicate) {
+          skipped += 1
+          continue
+        }
+        record.sessions.push({ id: `study-${uuid()}`, courseId, date: row.date, minutes: row.minutes, note: row.note })
+        added += 1
+      }
+    }
+  })
+  return { added, updated, skipped }
 }

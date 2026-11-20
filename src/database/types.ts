@@ -600,6 +600,11 @@ export interface PerformanceCourseSettings {
   target: number
   /** Minutes per week the student plans to study; drives the projection. */
   plannedMinutesPerWeek: number | null
+  /**
+   * How the course is graded, by category. When set, each assessment's weight
+   * in a listed category is derived from it (see `rubricWeights`).
+   */
+  rubric?: Array<{ category: string; weight: number; count?: number }>
 }
 
 export interface PerformanceAssessment {
@@ -614,6 +619,8 @@ export interface PerformanceAssessment {
   /** Marks earned; null while the assessment is still upcoming. */
   score: number | null
   total: number
+  /** Made by "Load a sample term", so "Remove sample data" can find it. */
+  sample?: true
 }
 
 export interface StudySession {
@@ -623,6 +630,8 @@ export interface StudySession {
   date: string
   minutes: number
   note?: string
+  /** Made by "Load a sample term". */
+  sample?: true
 }
 
 /**

@@ -17,6 +17,8 @@ The sign-in page first asks how the visitor is using Synonance:
 
 - **Performance** (`/course/performance`): grade book per course, current/projected grade, weighted and unweighted GPA, the score needed on remaining work, a knowledge-over-time chart with "keep your plan" vs "stop practising" projections, fluency per topic, and a Syno review of the term
 - Course-aware AI chat with conversation history; the tutor can read the Performance dashboard and record per-topic fluency on it
+- Grades in three ways: type them per course, **Paste grades** (a list copied from a spreadsheet or school portal: `name, type, date, weight, score`), or tell Syno in Chat — it saves scores, upcoming tests and study time (`grades_record`) and your grading rubric (`rubric_set`), which then sets each assessment's weight
+- **Remove sample data** clears what "Load a sample term" made, leaving your own entries
 - Structured notes with selection-based questions
 - Question practice, mock tests, review sessions, and study plans
 - Mastery and knowledge tracking

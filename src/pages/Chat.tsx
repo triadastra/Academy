@@ -210,6 +210,9 @@ export default function Chat() {
       'performance_get, summarise strengths and weaknesses with the evidence, and',
       'record per-topic fluency with fluency_update so their dashboard reflects it.',
       'Do the same after you have checked their understanding of a topic.',
+      'When they tell you a score, an upcoming test or time they studied, save it with',
+      'grades_record; when they give you their rubric, syllabus weights or grading',
+      'policy, save it with rubric_set. Say exactly what you saved.',
       '',
       'The shared agent retrieves course notes before generating a reply; use that evidence and read further with tools when needed.',
     ].join('\n')
