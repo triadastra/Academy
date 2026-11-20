@@ -213,7 +213,9 @@ function applyEvent(state: MemoryState | null, event: KnowledgeEvent, day: numbe
   if (event.kind === 'study') {
     const minutes = Math.max(0, event.minutes)
     // Diminishing returns within a sitting: the first hour does most of it.
-    const gain = 0.28 * (1 - Math.exp(-minutes / 60))
+    // Small on purpose — study alone should not carry an estimate to 100;
+    // results are what anchor it.
+    const gain = 0.12 * (1 - Math.exp(-minutes / 60))
     const effort = Math.min(1, minutes / 30)
     const stability = clamp(
       state.stability * (1 + effort * (0.15 + 1.4 * (1 - recall))),

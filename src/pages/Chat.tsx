@@ -29,6 +29,7 @@ import {
   appendChatMessage,
   consumePendingChatPrompt,
   getCurrentUser,
+  getSettings,
   isPersonalAccount,
   subscribeDatabase,
   upsertChatMessage,
@@ -83,7 +84,13 @@ export default function Chat() {
   const [activeCourse, setActiveCourseState] = useState(getActiveCourse)
   const [empty, setEmpty] = useState(true)
   const [messages, setMessages] = useState<DisplayMessage[]>([])
-  const [draft, setDraft] = useState(consumePendingChatPrompt)
+  // Read the hand-off prompt during render, but clear it in an effect:
+  // clearing writes the database, and a write during render made other
+  // subscribed components (AppTour) update mid-render.
+  const [draft, setDraft] = useState(() => getSettings().pendingChatPrompt)
+  useEffect(() => {
+    consumePendingChatPrompt()
+  }, [])
   const [streaming, setStreaming] = useState(false)
   const [hintShown, setHintShown] = useState(false)
   const [checkAnswer, setCheckAnswer] = useState('')
@@ -402,8 +409,17 @@ export default function Chat() {
             <div className="mt-6 w-full"><ChatComposer value={draft} onChange={setDraft} onSend={() => void send()} onStop={() => abortRef.current?.abort()} busy={streaming} webSearch={webSearch} onWebSearch={() => setWebSearch((on) => !on)} course={activeCourse.code} /></div>
             <div className="mt-4 grid w-full grid-cols-1 gap-2 sm:grid-cols-3">
               <button onClick={() => setDraft('Help me understand a topic step by step: ')} className="rounded-lg border border-rule bg-surface p-4 text-left text-[13px] text-board hover:bg-board-tint">Explain a concept <span className="mt-1 block text-[12px] text-ink-muted">Build understanding, one step at a time</span></button>
-              <Link to="/course/questions" className="rounded-lg border border-rule bg-surface p-4 text-[13px] text-board hover:bg-board-tint">Build your quiz bank <span className="mt-1 block text-[12px] text-ink-muted">Generate questions from your notes</span></Link>
-              <Link to="/course/mock-tests" className="rounded-lg border border-rule bg-surface p-4 text-[13px] text-board hover:bg-board-tint">Create a practice test <span className="mt-1 block text-[12px] text-ink-muted">Put your knowledge to the test</span></Link>
+              {isPersonalAccount() ? (
+                <>
+                  <button onClick={() => setDraft('Quiz me on this course, one question at a time, and update my fluency when we are done.')} className="rounded-lg border border-rule bg-surface p-4 text-left text-[13px] text-board hover:bg-board-tint">Quiz me <span className="mt-1 block text-[12px] text-ink-muted">Check what you know and rate your fluency</span></button>
+                  <button onClick={() => setDraft('What am I good at and weak at in this course? Update my fluency on the dashboard.')} className="rounded-lg border border-rule bg-surface p-4 text-left text-[13px] text-board hover:bg-board-tint">Strengths and gaps <span className="mt-1 block text-[12px] text-ink-muted">Read your dashboard and summarise</span></button>
+                </>
+              ) : (
+                <>
+                  <Link to="/course/questions" className="rounded-lg border border-rule bg-surface p-4 text-[13px] text-board hover:bg-board-tint">Build your quiz bank <span className="mt-1 block text-[12px] text-ink-muted">Generate questions from your notes</span></Link>
+                  <Link to="/course/mock-tests" className="rounded-lg border border-rule bg-surface p-4 text-[13px] text-board hover:bg-board-tint">Create a practice test <span className="mt-1 block text-[12px] text-ink-muted">Put your knowledge to the test</span></Link>
+                </>
+              )}
             </div>
 
             {/* Where the student left off. A blank composer is the right

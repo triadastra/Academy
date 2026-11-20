@@ -199,10 +199,11 @@ export default function Notes() {
                 key={`${activeCourse.id}-${selected.id}-${selected.revision}`}
                 unit={selected}
                 onQueued={queue}
+                askOnly={personal}
               >
                 <div>
                   <div className="font-mono text-[10px] uppercase tracking-wider text-board">
-                    Everyone’s guide · Revision {selected.revision}
+                    {personal ? 'Your notes' : 'Everyone’s guide'} · Revision {selected.revision}
                   </div>
                   <h2 className="mt-3 font-serif text-3xl leading-tight">
                     {selected.code} {selected.title}
@@ -215,8 +216,9 @@ export default function Notes() {
                       size={14}
                       className="mt-0.5 shrink-0 text-board"
                     />
-                    Highlight a passage to ask the agent, report a problem, or
-                    suggest an addition.
+                    {personal
+                      ? 'Highlight a passage to ask the agent about it.'
+                      : 'Highlight a passage to ask the agent, report a problem, or suggest an addition.'}
                   </div>
                   <label className="mt-5 flex items-center gap-2 rounded-control border border-rule bg-surface px-3 py-2.5">
                     <Search size={15} className="text-ink-muted" />

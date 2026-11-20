@@ -190,7 +190,10 @@ export async function importSourcesAsIs(course: PersonalCourse, sourceIds: strin
     const code = nextCode(existing, offset++)
     const title = source.name.replace(/\.[a-z0-9]+$/i, '').replace(/[_-]+/g, ' ').trim() || 'Imported file'
     const body = cleanMarkdown(text).replace(/^#\s/gm, '## ')
-    notes.push(noteFromMarkdown(course.id, `# ${code} ${title}\n\nImported from ${source.name}.\n\n## Content\n\n${body}`, code))
+    // A file that already has headings keeps them as sections; plain text
+    // gets one section to live in.
+    const sections = /^##\s/m.test(body) ? body : `## Content\n\n${body}`
+    notes.push(noteFromMarkdown(course.id, `# ${code} ${title}\n\nImported from ${source.name}.\n\n${sections}`, code))
   }
   if (notes.length === 0) throw new Error('The text of these files is no longer on this browser. Drop them in again.')
   upsertPersonalNotes(course.id, notes)

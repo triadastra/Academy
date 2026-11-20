@@ -41,7 +41,7 @@ import CourseShell from '@/components/CourseShell'
 import Page, { PageAction, PageBar, PageBody, PageNotice, Toast } from '@/components/Page'
 import MarkdownText from '@/components/MarkdownText'
 import { getActiveCourse, getAvailableCourses, setActiveCourse, type ActiveCourse } from '@/lib/course-selection'
-import { getSettings, subscribeDatabase, updateSettings } from '@/database/client'
+import { getSettings, isPersonalAccount, subscribeDatabase, updateSettings } from '@/database/client'
 import { findCatalogCourses } from '@/data/course-catalog'
 import { getPersonalWorkspace, isPersonalCourseId, RIGOR_BOOST } from '@/database/personal'
 import {
@@ -184,6 +184,9 @@ export default function Performance() {
   const practice30 = views.flatMap((view) => view.activity.practice.filter((day) => dayIndex(day.date) > dayIndex(today) - 30))
   const answered30 = practice30.reduce((sum, day) => sum + day.answered, 0)
   const correct30 = practice30.reduce((sum, day) => sum + day.correct, 0)
+  const upcoming = record.assessments
+    .filter((item) => item.score === null && item.date >= today && views.some((view) => view.course.id === item.courseId))
+    .sort((a, b) => a.date.localeCompare(b.date))
   const empty = record.assessments.length === 0 && record.sessions.length === 0 && views.every((view) => view.activity.events.length === 0)
 
   if (courses.length === 0) {
@@ -249,12 +252,25 @@ export default function Performance() {
               value={`${(minutesThisWeek / 60).toFixed(1)} h`}
               sub={`${Math.round(minutesThisWeek)} min logged or practised`}
             />
-            <StatTile
-              label="Practice accuracy, 30 days"
-              icon={<BookOpenCheck size={17} className="text-board" />}
-              value={answered30 ? `${Math.round((correct30 / answered30) * 100)}%` : '—'}
-              sub={answered30 ? `${correct30} of ${answered30} questions correct` : 'Answer questions in the Question Base'}
-            />
+            {isPersonalAccount() ? (
+              <StatTile
+                label="Coming up"
+                icon={<Target size={17} className="text-board" />}
+                value={String(upcoming.length)}
+                sub={
+                  upcoming[0]
+                    ? `Next: ${upcoming[0].title}, ${shortDate(upcoming[0].date)}`
+                    : 'Add upcoming tests to project your grades'
+                }
+              />
+            ) : (
+              <StatTile
+                label="Practice accuracy, 30 days"
+                icon={<BookOpenCheck size={17} className="text-board" />}
+                value={answered30 ? `${Math.round((correct30 / answered30) * 100)}%` : '—'}
+                sub={answered30 ? `${correct30} of ${answered30} questions correct` : 'Answer questions in the Question Base'}
+              />
+            )}
           </section>
 
           <KnowledgeChart views={views} focusId={focusId} onFocus={setFocusId} today={today} />
@@ -371,7 +387,7 @@ function KnowledgeChart({
           </p>
         </div>
         <div className="flex flex-wrap gap-1" role="group" aria-label="Course shown">
-          {[{ id: 'all', name: 'All courses' }, ...views.map((view) => ({ id: view.course.id, name: view.course.code || view.course.displayName }))].map((option) => (
+          {[{ id: 'all', name: 'All courses' }, ...views.map((view) => ({ id: view.course.id, name: view.course.displayName }))].map((option) => (
             <button
               key={option.id}
               type="button"
@@ -871,7 +887,7 @@ function CourseDetail({
             {sessions.length > 8 ? <li className="py-1.5 text-[12px] text-ink-muted">and {sessions.length - 8} earlier</li> : null}
           </ul>
         </div>
-        <div>
+        {isPersonalCourseId(course.id) ? null : <div>
           <h3 className="flex items-center gap-2 text-[14px] font-medium text-ink">
             <BookOpenCheck size={15} className="text-board" /> Practice in the app
           </h3>
@@ -889,7 +905,7 @@ function CourseDetail({
               Questions you answer in this course are picked up here automatically, along with graded mock papers.
             </p>
           )}
-        </div>
+        </div>}
       </div>
     </section>
   )
