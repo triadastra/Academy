@@ -32,12 +32,15 @@ import {
   FileText,
   ScrollText,
   CirclePlus,
+  FolderUp,
+  TrendingUp,
 } from 'lucide-react'
 import ForcedTutorial, { type TutorialStep } from '@/components/ForcedTutorial'
 import {
   completeAppTour,
   getCurrentUserRole,
   isAuthenticated,
+  isPersonalAccount,
   markAccessGuideSeen,
   needsAppTour,
   subscribeDatabase,
@@ -228,6 +231,17 @@ const STUDENT_TOUR: TutorialStep[] = [
     body: <p>Full practice papers in exam conditions, marked when you hand them in.</p>,
   },
   {
+    title: 'Performance',
+    target: 'performance',
+    icon: <TrendingUp size={20} />,
+    body: (
+      <p>
+        Your grade book: grades, GPA, what you need on what is left, and how fast each subject fades
+        if you stop practising. Syno can rate what you are good at from your chats.
+      </p>
+    ),
+  },
+  {
     title: 'Notifications',
     target: 'notifications',
     icon: <Bell size={20} />,
@@ -241,6 +255,54 @@ const STUDENT_TOUR: TutorialStep[] = [
       <p>
         Change your grade and courses, language and preferences, export your data — and replay this
         tour any time.
+      </p>
+    ),
+  },
+]
+
+const PERSONAL_TOUR: TutorialStep[] = [
+  {
+    eyebrow: "You're in",
+    title: 'Your personal workspace',
+    icon: <GraduationCap size={20} />,
+    body: (
+      <p>
+        Everything here is yours alone: courses you create, files you drop in and the notes Syno
+        writes from them. Nothing is shared with a school.
+      </p>
+    ),
+  },
+  {
+    title: 'My courses',
+    target: 'courses',
+    icon: <LayoutGrid size={20} />,
+    body: <p>Create a course for anything you are learning, and switch between them here.</p>,
+  },
+  {
+    title: 'Sources',
+    target: 'sources',
+    icon: <FolderUp size={20} />,
+    body: (
+      <p>
+        Drop in PDFs, slides exported to PDF, or your own notes. Syno reads them and writes
+        structured study notes for the course.
+      </p>
+    ),
+  },
+  {
+    title: 'Notes and Chat',
+    target: 'notes',
+    icon: <NotebookTabs size={20} />,
+    body: <p>Read your notes, and ask Syno about them in Chat — answers cite your own material.</p>,
+  },
+  {
+    title: 'Performance',
+    target: 'performance',
+    icon: <TrendingUp size={20} />,
+    body: (
+      <p>
+        Log scores and study time to see your GPA, projected grades and a forgetting curve per
+        course. Syno updates your fluency per topic as you chat.
       </p>
     ),
   },
@@ -322,9 +384,9 @@ export function AppTour() {
   return (
     <ForcedTutorial
       // Remount per role, so a role change mid-tour starts the right steps.
-      key={role}
+      key={`${role}:${isPersonalAccount() ? 'personal' : 'school'}`}
       label="Synonance tour"
-      steps={teacher ? TEACHER_TOUR : STUDENT_TOUR}
+      steps={teacher ? TEACHER_TOUR : isPersonalAccount() ? PERSONAL_TOUR : STUDENT_TOUR}
       finishLabel={teacher ? 'Start teaching' : 'Start learning'}
       onFinish={completeAppTour}
     />
