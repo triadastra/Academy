@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import {
   subscribeDatabase,
   isAuthenticated,
+  isPersonalAccount,
   getCurrentUserId,
 } from '@/database/client'
 import {
@@ -16,7 +17,8 @@ export default function ContributionWorker() {
     let user = '',
       session = ''
     const tick = (force = false) => {
-      const nextUser = isAuthenticated() ? getCurrentUserId() : ''
+      // Personal accounts never talk to the school's shared notes service.
+      const nextUser = isAuthenticated() && !isPersonalAccount() ? getCurrentUserId() : ''
       if (user !== nextUser) {
         user = nextUser
         session = ''

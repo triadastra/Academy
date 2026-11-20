@@ -6,9 +6,19 @@ Synonance is a course-grounded learning platform for students, teachers, and sch
 
 ## What it includes
 
+### Accounts
+
+The sign-in page first asks how the visitor is using Synonance:
+
+- **School account** — Launchpad sign-in, then the school curriculum. Reads the institution's shared notes, question bank, mock papers and notifications.
+- **Personal account** — a username and password private to this browser. Creates its own courses, drops files into them, and Syno writes the notes. Never reads or writes the school's shared material, never appears in the school's people table or audit log.
+
 ### Students
 
-- Course-aware AI chat with conversation history
+- **Performance** (`/course/performance`): grade book per course, current/projected grade, weighted and unweighted GPA, the score needed on remaining work, a knowledge-over-time chart with "keep your plan" vs "stop practising" projections, fluency per topic, and a Syno review of the term
+- Course-aware AI chat with conversation history; the tutor can read the Performance dashboard and record per-topic fluency on it
+- Grades in three ways: type them per course, **Paste grades** (a list copied from a spreadsheet or school portal: `name, type, date, weight, score`), or tell Syno in Chat — it saves scores, upcoming tests and study time (`grades_record`) and your grading rubric (`rubric_set`), which then sets each assessment's weight
+- **Remove sample data** clears what "Load a sample term" made, leaving your own entries
 - Structured notes with selection-based questions
 - Question practice, mock tests, review sessions, and study plans
 - Mastery and knowledge tracking
@@ -95,6 +105,7 @@ scope-isolation regressions; `npm run test:generation` checks assessment generat
 | `npm run build` | Type-check and create a production build in `dist/` |
 | `npm run lint` | Run ESLint across the project |
 | `npm run test:generation` | Verify topic planning, draft review, cancellation, and test assembly |
+| `npm run test:performance` | Check grade, GPA and knowledge-projection arithmetic |
 | `npm run preview` | Preview the production build locally |
 
 ## Project structure

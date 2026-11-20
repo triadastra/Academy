@@ -88,7 +88,9 @@ export function listAccounts(): AccountSummary[] {
   if (!isCurrentUserAdministrator()) return []
   const database = getDatabase()
   const currentUserId = database.appSettings.currentUserId
-  return database.users.map((user) => ({
+  // Personal accounts are not the institution's: they never appear in its
+  // people table, its exports or its role controls.
+  return database.users.filter((user) => user.accountKind !== 'personal').map((user) => ({
     id: user.id,
     name: user.name,
     displayName: user.displayName,

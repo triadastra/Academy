@@ -61,6 +61,37 @@ import {
   readSection,
   searchNotes,
 } from '@/database/notes-tools'
+import { courseSnapshot, fluencyBand, importRecords, recordFluency, rubricFor, setRubric } from '@/database/performance'
+import {
+  guessCategory,
+  normaliseCategory,
+  parseDate,
+  parseMinutes,
+  parseWeight,
+  type ImportRow,
+} from './performance-import'
+import { localDate } from './performance-model'
+import { isPersonalCourseId } from '@/database/personal'
+
+/**
+ * A personal course may only use tools that read its own notes and the
+ * student's own data. Everything else either searches the school's shared
+ * material (questions, mock papers, the whole-database grep) or writes into a
+ * shared table (question drafts, papers, note revisions).
+ */
+const PERSONAL_TOOLS = new Set([
+  'notes_search',
+  'notes_list',
+  'notes_read',
+  'notes_read_section',
+  'notes_cite',
+  'performance_get',
+  'fluency_update',
+  'grades_record',
+  'rubric_set',
+  'memory_read',
+  'memory_update',
+])
 
 type ToolArgs = Record<string, never> & Record<string, unknown>
 
@@ -228,6 +259,175 @@ export const LOCAL_TOOLS = new Map<string, LocalTool>([
           questionId: attempt.questionId,
           result: attempt.result,
         })),
+      }
+    },
+  ),
+  tool(
+    'performance_get',
+    'Read this student’s own performance in the active course from their Performance dashboard: current and projected grade, target, the knowledge estimate and how fast it is fading, recent study time, practice accuracy, recent results, and the fluency ratings already recorded per topic. Use it when the student asks how they are doing, what they are good or bad at, or what to focus on.',
+    obj({}),
+    () => 'Reading your performance dashboard',
+    (_a, courseId) => courseSnapshot(courseId),
+  ),
+  tool(
+    'fluency_update',
+    'Record how fluent the student is in specific topics of THIS course on their Performance dashboard. Score 0–100 (75+ strong, 50–74 developing, under 50 weak). Base each score on evidence: how they explained or answered in this conversation, their results from performance_get, the questions they got wrong. Call it after summarising what they are mastering and what they are weak at, or after checking their understanding of a topic. Give a short, specific evidence line for each. A topic rated again replaces its old score. Do not rate topics you have no evidence about.',
+    obj(
+      {
+        ratings: {
+          type: 'array',
+          maxItems: 12,
+          items: obj(
+            {
+              topic: { type: 'string', description: 'Topic name, preferably the note title.' },
+              noteCode: { type: 'string', description: 'Course note code, when the topic is one note.' },
+              score: { type: 'number', minimum: 0, maximum: 100 },
+              evidence: { type: 'string', description: 'One line: what shows this.' },
+            },
+            ['topic', 'score', 'evidence'],
+          ),
+        },
+      },
+      ['ratings'],
+    ),
+    (a) => {
+      const ratings: unknown = a.ratings
+      const count = Array.isArray(ratings) ? ratings.length : 0
+      return `Updating fluency on your dashboard · ${count} topic${count === 1 ? '' : 's'}`
+    },
+    (a, courseId) => {
+      if (!courseId) return { ok: false, error: 'No active course.' }
+      const raw = Array.isArray(a.ratings) ? (a.ratings as unknown[]) : []
+      const saved = recordFluency(
+        courseId,
+        raw.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object').map((item) => ({
+          topic: str(item.topic),
+          score: num(item.score, NaN),
+          evidence: str(item.evidence),
+          noteCode: str(item.noteCode) || undefined,
+        })),
+        'chat',
+      )
+      if (saved.length === 0) return { ok: false, error: 'No valid ratings: each needs a topic and a 0–100 score.' }
+      return {
+        ok: true,
+        saved: saved.map((rating) => ({ topic: rating.topic, score: rating.score, band: fluencyBand(rating.score) })),
+        note: 'Shown on the student’s Performance dashboard under Fluency. Tell them briefly what you recorded.',
+      }
+    },
+  ),
+  tool(
+    'grades_record',
+    'Save scores, upcoming assessments and study time the student tells you about into the active course on their Performance dashboard. Use it whenever they mention a result ("I got 76/100 on unit test 2"), an upcoming test, or time they studied. An assessment with the same title and date as an existing one is updated, so re-saving is safe. Give weightPct (share of the final grade) when known; if the course has a rubric (see performance_get) the weight is set from it and you may omit it. Leave score out for something still to come. If the rubric expects more items in a category than are recorded, ask for their dates and add them as upcoming. Ask rather than guess a date. Tell the student exactly what you saved.',
+    obj({
+      assessments: {
+        type: 'array',
+        maxItems: 40,
+        items: obj(
+          {
+            title: S,
+            category: { type: 'string', description: 'Test, Quiz, Homework, Midterm, Final exam, Project, Lab, Essay, …' },
+            date: { type: 'string', description: 'YYYY-MM-DD' },
+            weightPct: N,
+            score: { type: 'number', description: 'Marks earned. Omit for upcoming.' },
+            total: { type: 'number', description: 'Marks available; default 100.' },
+          },
+          ['title', 'date'],
+        ),
+      },
+      studySessions: {
+        type: 'array',
+        maxItems: 40,
+        items: obj({ date: { type: 'string', description: 'YYYY-MM-DD' }, minutes: N, note: S }, ['date', 'minutes']),
+      },
+    }),
+    (a) => {
+      const assessments: unknown = a.assessments
+      const sessions: unknown = a.studySessions
+      const count = (Array.isArray(assessments) ? assessments.length : 0) + (Array.isArray(sessions) ? sessions.length : 0)
+      return `Saving ${count} record${count === 1 ? '' : 's'} to your dashboard`
+    },
+    (a, courseId) => {
+      if (!courseId) return { ok: false, error: 'No active course.' }
+      const today = localDate()
+      const rows: ImportRow[] = []
+      const problems: string[] = []
+      const list = (value: unknown) =>
+        (Array.isArray(value) ? value : []).filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+      for (const item of list(a.assessments)) {
+        const title = str(item.title).trim().slice(0, 80)
+        const date = parseDate(str(item.date), today)
+        const total = num(item.total, 100)
+        const score = typeof item.score === 'number' && Number.isFinite(item.score) ? item.score : null
+        const weight = item.weightPct === undefined ? 0 : parseWeight(String(item.weightPct))
+        if (!title) { problems.push('An assessment had no title.'); continue }
+        if (!date) { problems.push(`${title}: "${str(item.date)}" is not a date.`); continue }
+        if (!(total > 0) || (score !== null && (score < 0 || score > total * 1.5))) { problems.push(`${title}: score does not fit the total.`); continue }
+        if (weight === null) { problems.push(`${title}: weight must be 0–100.`); continue }
+        rows.push({
+          kind: 'assessment',
+          title,
+          category: str(item.category) ? normaliseCategory(str(item.category)) : guessCategory(title),
+          date,
+          weight,
+          score,
+          total,
+        })
+      }
+      for (const item of list(a.studySessions)) {
+        const date = parseDate(str(item.date), today)
+        const minutes = parseMinutes(String(item.minutes ?? ''))
+        if (!date || minutes === null) { problems.push(`Study session "${str(item.date)}, ${String(item.minutes)}" was not valid.`); continue }
+        rows.push({ kind: 'study', date, minutes, ...(str(item.note) ? { note: str(item.note).slice(0, 120) } : {}) })
+      }
+      if (rows.length === 0) return { ok: false, error: problems.join(' ') || 'Nothing to save.' }
+      const result = importRecords(courseId, rows)
+      const ungraded = rows.filter((row) => row.kind === 'assessment' && row.weight === 0).length
+      return {
+        ok: true,
+        ...result,
+        problems,
+        note:
+          ungraded && rubricFor(courseId).length === 0
+            ? `${ungraded} assessment(s) were saved with weight 0, so they do not count toward the grade yet. Ask for their weights or the course rubric.`
+            : 'Saved to the Performance dashboard.',
+      }
+    },
+  ),
+  tool(
+    'rubric_set',
+    'Set how the active course is graded, by category, on the student\'s Performance dashboard (e.g. Tests 50%, Quizzes 20%, Homework 15%, Final exam 15%). Each category\'s weight is then split evenly across its assessments; give count when the student knows how many there will be (e.g. 4 unit tests), so the share of ones not yet recorded is held back. Weights should add up to 100. Replaces the previous rubric. Use it when the student gives you their syllabus, rubric or grading policy.',
+    obj(
+      {
+        categories: {
+          type: 'array',
+          maxItems: 12,
+          items: obj({ category: S, weightPct: N, count: N }, ['category', 'weightPct']),
+        },
+      },
+      ['categories'],
+    ),
+    () => 'Setting your course rubric',
+    (a, courseId) => {
+      if (!courseId) return { ok: false, error: 'No active course.' }
+      const raw: unknown = a.categories
+      const entries = (Array.isArray(raw) ? raw : [])
+        .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+        .map((item) => ({
+          category: normaliseCategory(str(item.category)),
+          weight: num(item.weightPct, NaN),
+          count: Math.max(0, Math.floor(num(item.count, 0))) || undefined,
+        }))
+        .filter((entry) => entry.category && entry.weight > 0 && entry.weight <= 100)
+      if (entries.length === 0) return { ok: false, error: 'No valid categories: each needs a name and a weight between 0 and 100.' }
+      const total = entries.reduce((sum, entry) => sum + entry.weight, 0)
+      setRubric(courseId, entries)
+      return {
+        ok: true,
+        rubric: entries,
+        totalPct: total,
+        warning: Math.abs(total - 100) > 0.5 ? `The weights add up to ${total}%, not 100%. Check with the student.` : undefined,
+        note: 'Assessment weights in these categories now follow the rubric.',
       }
     },
   ),
@@ -574,9 +774,11 @@ export async function runAgent({
       throw new DOMException('The active course or student changed.', 'AbortError')
     }
   }
-  const readTools = new Set(['notes_search', 'notes_list', 'notes_read', 'notes_read_section', 'notes_cite', 'database_grep', 'questions_search', 'progress_get', 'memory_read', 'mock_tests_list'])
+  const readTools = new Set(['notes_search', 'notes_list', 'notes_read', 'notes_read_section', 'notes_cite', 'database_grep', 'questions_search', 'progress_get', 'performance_get', 'memory_read', 'mock_tests_list'])
+  const personal = isPersonalCourseId(courseId)
   const specs = [...LOCAL_TOOLS.values()].map((entry) => entry.spec)
     .filter(spec => !readOnly || readTools.has(spec.function.name))
+    .filter(spec => !personal || PERSONAL_TOOLS.has(spec.function.name))
   const availableNames = new Set(specs.map(spec => spec.function.name))
   if (webSearch) specs.push(WEB_SEARCH_TOOL)
 
@@ -627,7 +829,7 @@ export async function runAgent({
    * twice.
    */
   const finish = (answer: string) => {
-    if (!readOnly && touchedNotes.size > 0) {
+    if (!readOnly && !personal && touchedNotes.size > 0) {
       try {
         maybeAutoSynthesize(resolveSession(), [...touchedNotes])
       } catch {

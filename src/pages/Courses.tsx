@@ -9,7 +9,8 @@ import Page, { PageBody } from '@/components/Page'
 import { courses, type Course } from '@/data/mock'
 import { findCatalogCourses } from '@/data/course-catalog'
 import { courseDisplayName, setActiveCourse } from '@/lib/course-selection'
-import { getSettings } from '@/database/client'
+import { getSettings, isPersonalAccount } from '@/database/client'
+import PersonalCourses from '@/pages/PersonalCourses'
 
 const SLUGS: Record<string, string> = {
   'math-aa-hl': 'maaa-hl-24s2',
@@ -18,6 +19,11 @@ const SLUGS: Record<string, string> = {
 }
 
 export default function Courses() {
+  // A personal account has no school catalogue: its own courses instead.
+  return isPersonalAccount() ? <PersonalCourses /> : <SchoolCourses />
+}
+
+function SchoolCourses() {
   const navigate = useNavigate()
   const [displayCourses] = useState<(Course & { displayName: string })[]>(() => {
     try {

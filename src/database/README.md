@@ -10,6 +10,33 @@
   them, and one `SynthesisBatch` row per run. See "Sessions and generated material" below.
 - Per-user databases: profile preferences, grade/course selection, active course, menu state,
   private chat threads, question attempts, uploaded-paper records, and grades.
+  - `performance` (optional): the student's grade book, study log, per-course credits/targets/
+    study plan, and per-topic fluency ratings. See `performance.ts`; the arithmetic is in
+    `src/lib/performance-model.ts`.
+  - `personal` (optional, personal accounts only): courses the account created, metadata for
+    the files dropped into them, and the notes Syno wrote. The files' text is kept in IndexedDB
+    (`src/lib/personal-files.ts`), not in the localStorage delta, keyed by user id.
+
+### Tutorials
+
+Every tutorial (access video, Launchpad access guide, first-run app tour) can be skipped. How each
+one ended (`done` or `skipped`) is remembered in the `synonance_tutorials` cookie for this browser
+and, once signed in, in `settings.tutorials` on the account. The two are merged both ways at every
+sign-in (`syncTutorialChoices` in `client.ts`). A choice made before signing in therefore carries
+onto the account, and an account's choice carries to a new browser. The older per-browser
+localStorage keys are still honoured. Profile → *Replay the tour* forgets the tour's entry in both places.
+
+### Personal and school accounts
+
+`ApplicationUser.accountKind` is `'personal'` for accounts made from the sign-in page's personal
+option and absent (school) for everything else. A personal session (`identityProvider:
+'personal'`) is accepted only for a personal row, and a personal row is never accepted through
+the Launchpad/institution path. `canOpenStudentWorkspace` admits either a verified school member
+or a personal account to the student pages; isolation from shared material is then enforced where
+data is read: `getAvailableCourses` returns only the account's own courses, `notesForCourse`
+returns only private notes for a `personal-*` course, school notifications and the people table
+exclude personal accounts, the contribution worker does not sync for them, and their sign-ins
+are not written to the institution's audit log.
 
 The current user is selected by `appSettings.currentUserId`. Each entry in `userDatabases`
 is isolated by that user id.

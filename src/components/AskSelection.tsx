@@ -25,10 +25,16 @@ export default function AskSelection({
   unit,
   children,
   onQueued,
+  askOnly = false,
 }: {
   unit: UnitNote
   children: ReactNode
   onQueued?: () => void
+  /**
+   * Only "Ask agent". Reports and suggested additions go to the shared
+   * contribution queue, which a personal course's private notes are not in.
+   */
+  askOnly?: boolean
 }) {
   const container = useRef<HTMLDivElement>(null)
   const panel = useRef<HTMLElement>(null)
@@ -332,7 +338,7 @@ export default function AskSelection({
                 )}
               </div>
             )}
-            {menuOpen && (
+            {menuOpen && !askOnly && (
               <div
                 className="flex flex-wrap gap-1 border-b border-rule p-2"
                 aria-label="Annotation options"
@@ -444,7 +450,7 @@ export default function AskSelection({
                 )}
                 <span className="hidden sm:inline">Send</span>
               </button>
-              <button
+              {askOnly ? null : <button
                 type="button"
                 disabled={busy || sent}
                 aria-label="Report"
@@ -455,7 +461,7 @@ export default function AskSelection({
               >
                 <Flag size={14} />
                 <span className="hidden sm:inline">Report</span>
-              </button>
+              </button>}
               <button
                 type="button"
                 onClick={close}

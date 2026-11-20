@@ -45,6 +45,10 @@ function table(): AppNotification[] {
 
 /** Rows addressed to this user: their directs, plus every broadcast. */
 function addressedTo(userId: string) {
+  // Institution mail is for the institution's members. A personal account is
+  // not one, so school broadcasts never reach it.
+  const account = getDatabase().users.find((user) => user.id === userId)
+  if (account?.accountKind === 'personal') return []
   return table().filter(
     (row) =>
       (row.recipientId === userId || row.recipientId === EVERYONE) &&

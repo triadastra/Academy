@@ -25,6 +25,8 @@ import {
   ChevronRight,
   PanelLeftClose,
   PanelLeftOpen,
+  TrendingUp,
+  FolderUp,
 } from 'lucide-react'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { getActiveCourse } from '@/lib/course-selection'
@@ -32,6 +34,7 @@ import {
   getCurrentUser,
   getInstitution,
   getSettings,
+  isPersonalAccount,
   subscribeDatabase,
   touchSession,
   updateSettings,
@@ -58,7 +61,20 @@ const STUDENT_NAV: CourseNavItem[] = [
   { key: 'notes', label: 'Notes', to: '/course/notes', icon: <NotebookTabs size={16} /> },
   { key: 'questions', label: 'Question Base', to: '/course/questions', icon: <BookOpen size={16} /> },
   { key: 'mock-tests', label: 'Mock Tests', to: '/course/mock-tests', icon: <FileStack size={16} /> },
+  { key: 'performance', label: 'Performance', to: '/course/performance', icon: <TrendingUp size={16} /> },
   { key: 'notifications', label: 'Notifications', to: '/notifications', icon: <Bell size={16} /> },
+  { key: 'profile', label: 'Profile', to: '/profile', icon: <UserRound size={16} /> },
+]
+
+// Personal accounts: their own courses, files and notes. The question bank,
+// mock papers and notifications are the school's shared material, so they are
+// not offered.
+const PERSONAL_NAV: CourseNavItem[] = [
+  { key: 'courses', label: 'My courses', to: '/courses', icon: <LayoutGrid size={16} /> },
+  { key: 'sources', label: 'Sources', to: '/course/sources', icon: <FolderUp size={16} /> },
+  { key: 'notes', label: 'Notes', to: '/course/notes', icon: <NotebookTabs size={16} /> },
+  { key: 'chat', label: 'Chat', to: '/course/chat', icon: <MessageSquare size={16} /> },
+  { key: 'performance', label: 'Performance', to: '/course/performance', icon: <TrendingUp size={16} /> },
   { key: 'profile', label: 'Profile', to: '/profile', icon: <UserRound size={16} /> },
 ]
 
@@ -74,7 +90,8 @@ const TEACHER_NAV: CourseNavItem[] = [
 ]
 
 export function courseNav(role: 'student' | 'teacher'): CourseNavItem[] {
-  return role === 'student' ? STUDENT_NAV : TEACHER_NAV
+  if (role === 'teacher') return TEACHER_NAV
+  return isPersonalAccount() ? PERSONAL_NAV : STUDENT_NAV
 }
 
 export default function CourseShell({
@@ -109,6 +126,7 @@ export default function CourseShell({
   // else.
   const account = getCurrentUser()
   const institution = getInstitution()
+  const personal = isPersonalAccount()
   const user = {
     name: account?.displayName || account?.name || 'Signed in',
     // Derived from the account, not from the `role` nav prop: the two can
@@ -176,8 +194,10 @@ export default function CourseShell({
         >
           {!collapsed ? (
             <div className="min-w-0 flex-1">
-              <div className="text-[14px] font-medium leading-tight">{institution.short}</div>
-              <div className="text-[12px] leading-snug text-paper/70">{institution.name}</div>
+              <div className="text-[14px] font-medium leading-tight">{personal ? 'Personal' : institution.short}</div>
+              <div className="text-[12px] leading-snug text-paper/70">
+                {personal ? 'Private workspace · this browser only' : institution.name}
+              </div>
             </div>
           ) : null}
           <button

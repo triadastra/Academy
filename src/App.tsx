@@ -7,6 +7,7 @@ import { lazy, Suspense, useEffect, useReducer, useState, type ReactNode } from 
 import { Navigate, Route, Routes } from 'react-router'
 import {
   canAccessTeaching,
+  canOpenStudentWorkspace,
   getAuthSession,
   getSignedInHomeRoute,
   hasVerifiedInstitutionMembership,
@@ -61,6 +62,8 @@ const Exports = lazy(() => import('@/pages/Exports'))
 const Security = lazy(() => import('@/pages/Security'))
 const People = lazy(() => import('@/pages/People'))
 const Announcements = lazy(() => import('@/pages/Announcements'))
+const Performance = lazy(() => import('@/pages/Performance'))
+const Sources = lazy(() => import('@/pages/Sources'))
 
 function RouteFallback() {
   return (
@@ -97,6 +100,15 @@ function RequireInstitution({ children }: { children: ReactNode }) {
 
 function protectedInstitutionPage(page: ReactNode) {
   return <RequireInstitution>{page}</RequireInstitution>
+}
+
+/**
+ * The student workspace: a verified school member or a personal account.
+ * Personal accounts get the same pages over their own private data — course
+ * selection and note lookup filter shared institution material out for them.
+ */
+function protectedStudentPage(page: ReactNode) {
+  return <RequireRole allow={canOpenStudentWorkspace}>{page}</RequireRole>
 }
 
 /**
@@ -228,16 +240,18 @@ export default function App() {
           <Route path="/setup" element={protectedInstitutionPage(<Setup />)} />
 
           {/* Student */}
-          <Route path="/courses" element={protectedInstitutionPage(<Courses />)} />
-          <Route path="/course/chat" element={protectedInstitutionPage(<Chat />)} />
-          <Route path="/course/chat/history" element={protectedInstitutionPage(<ChatHistory />)} />
-          <Route path="/course/chat/history/:threadId" element={protectedInstitutionPage(<ChatThread />)} />
-          <Route path="/course/notes" element={protectedInstitutionPage(<Notes />)} />
-          <Route path="/course/know" element={protectedInstitutionPage(<Know />)} />
+          <Route path="/courses" element={protectedStudentPage(<Courses />)} />
+          <Route path="/course/chat" element={protectedStudentPage(<Chat />)} />
+          <Route path="/course/chat/history" element={protectedStudentPage(<ChatHistory />)} />
+          <Route path="/course/chat/history/:threadId" element={protectedStudentPage(<ChatThread />)} />
+          <Route path="/course/notes" element={protectedStudentPage(<Notes />)} />
+          <Route path="/course/know" element={protectedStudentPage(<Know />)} />
           <Route path="/course/questions" element={protectedInstitutionPage(<QuestionBase />)} />
           <Route path="/course/mock-tests" element={protectedInstitutionPage(<MockTests />)} />
-          <Route path="/course/review" element={protectedInstitutionPage(<Navigate to="/course/questions" replace />)} />
-          <Route path="/course/plan" element={protectedInstitutionPage(<StudyPlan />)} />
+          <Route path="/course/review" element={protectedStudentPage(<Navigate to="/course/questions" replace />)} />
+          <Route path="/course/plan" element={protectedStudentPage(<StudyPlan />)} />
+          <Route path="/course/performance" element={protectedStudentPage(<Performance />)} />
+          <Route path="/course/sources" element={protectedStudentPage(<Sources />)} />
           <Route path="/notifications" element={protectedInstitutionPage(<Notifications />)} />
           <Route path="/profile" element={protectedPage(<Profile />)} />
 
