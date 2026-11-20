@@ -11,7 +11,7 @@ import Crest from '@/components/Crest'
 export const ACCESS_VIDEO_SRC = '/media/how-to-access-synonance.mp4'
 const ACCESS_VIDEO_POSTER = '/media/how-to-access-synonance.jpg'
 
-export default function AccessVideo({ onDone }: { onDone: () => void }) {
+export default function AccessVideo({ onDone }: { onDone: (outcome: 'done' | 'skipped') => void }) {
   const [ended, setEnded] = useState(false)
   const [failed, setFailed] = useState(false)
   const continueRef = useRef<HTMLButtonElement>(null)
@@ -58,7 +58,7 @@ export default function AccessVideo({ onDone }: { onDone: () => void }) {
           </div>
           <button
             type="button"
-            onClick={onDone}
+            onClick={() => onDone('skipped')}
             className="shrink-0 flex items-center gap-1.5 border border-rule text-ink text-[13px] font-medium rounded-control px-3 py-2 hover:bg-paper transition-colors duration-[120ms] ease-out"
           >
             <SkipForward size={14} />
@@ -95,7 +95,7 @@ export default function AccessVideo({ onDone }: { onDone: () => void }) {
           <button
             ref={continueRef}
             type="button"
-            onClick={onDone}
+            onClick={() => onDone('done')}
             disabled={!ended && !failed}
             className="shrink-0 flex items-center gap-2 bg-board text-surface text-[14px] font-medium rounded-control px-4 py-2.5 hover:bg-board-deep disabled:opacity-40 disabled:hover:bg-board transition-colors duration-[120ms] ease-out"
           >

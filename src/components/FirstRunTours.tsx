@@ -166,7 +166,11 @@ export function AccessGuide({ onDone }: { onDone: () => void }) {
       steps={ACCESS_STEPS}
       finishLabel="I'm ready to sign in"
       onFinish={() => {
-        markAccessGuideSeen()
+        markAccessGuideSeen('done')
+        onDone()
+      }}
+      onSkip={() => {
+        markAccessGuideSeen('skipped')
         onDone()
       }}
     />
@@ -388,7 +392,8 @@ export function AppTour() {
       label="Synonance tour"
       steps={teacher ? TEACHER_TOUR : isPersonalAccount() ? PERSONAL_TOUR : STUDENT_TOUR}
       finishLabel={teacher ? 'Start teaching' : 'Start learning'}
-      onFinish={completeAppTour}
+      onFinish={() => completeAppTour('done')}
+      onSkip={() => completeAppTour('skipped')}
     />
   )
 }

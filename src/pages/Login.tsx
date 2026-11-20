@@ -229,8 +229,8 @@ export default function Login() {
     <div className="min-h-[100dvh] overflow-y-auto bg-paper flex flex-col items-center justify-center px-4 py-8 relative">
       {onboarding === 'video' ? (
         <AccessVideo
-          onDone={() => {
-            markAccessVideoSeen()
+          onDone={(outcome) => {
+            markAccessVideoSeen(outcome)
             setOnboarding(hasSeenAccessGuide() ? null : 'guide')
           }}
         />

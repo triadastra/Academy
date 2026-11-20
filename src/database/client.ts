@@ -31,6 +31,8 @@ import type {
   QuestionAttempt,
   SignInThrottle,
   SynonanceDatabase,
+  TutorialChoice,
+  TutorialId,
   UnitNote,
   UserDatabase,
   UserMemory,
@@ -1055,6 +1057,9 @@ function signInUser(
     draft.appSettings.currentUserId = userId
     userDatabaseFrom(draft, userId).session = session
   })
+  // A tutorial skipped on this browser before signing in stays skipped for
+  // the account, and one the account skipped elsewhere stays skipped here.
+  syncTutorialChoices()
   return session
 }
 
@@ -1724,62 +1729,182 @@ export function updateSettings(patch: Partial<DatabaseSettings>) {
 /**
  * The pre-sign-in access guide ("how do I get into Synonance?").
  *
- * It runs before anyone is signed in, so there is no account to hang the flag
- * on: it is per browser. A visitor who clears storage, or opens Synonance on a
- * new device, sees it once more — a few clicks, and the cheaper mistake than
- * letting a first-time student reach the sign-in buttons without knowing they
- * need a verified Launchpad account first.
+ * It runs before anyone is signed in, so the choice is first kept on the
+ * browser and copied onto the account at sign-in (see below). A visitor on a
+ * new device who has never signed in there sees it once more — a few clicks,
+ * or one on Skip.
  */
 const ACCESS_GUIDE_KEY = 'synonance:access-guide-seen:v1'
 
-export function hasSeenAccessGuide(): boolean {
+// ── Tutorials: finished or skipped, per browser AND per account ──────────
+//
+// Every tutorial can be skipped, and how it ended is remembered in two places:
+//
+//   · a first-party cookie, `synonance_tutorials`, so this browser does not
+//     show it again — including before anyone signs in, which is when the
+//     access video and guide run;
+//   · the signed-in account's settings (`settings.tutorials`), so the choice
+//     follows the person to their next browser.
+//
+// `syncTutorialChoices` runs at every sign-in and merges the two: what this
+// browser already decided is copied onto the account, and what the account
+// decided is copied into this browser's cookie. The older per-browser
+// localStorage keys are still written and read, so nobody who finished a
+// tutorial before this existed is shown it again.
+
+const TUTORIAL_COOKIE = 'synonance_tutorials'
+const TUTORIAL_COOKIE_MAX_AGE = 60 * 60 * 24 * 400 // ~13 months, the browser cap
+const TUTORIAL_IDS: TutorialId[] = ['access-video', 'access-guide', 'app-tour']
+const LEGACY_TUTORIAL_KEYS: Partial<Record<TutorialId, string>> = {
+  'access-video': 'synonance:access-video-seen:v1',
+  'access-guide': ACCESS_GUIDE_KEY,
+}
+
+type TutorialChoices = Partial<Record<TutorialId, TutorialChoice>>
+
+function readTutorialCookie(): TutorialChoices {
   try {
-    return localStorage.getItem(ACCESS_GUIDE_KEY) !== null
+    const raw = document.cookie
+      .split('; ')
+      .find((part) => part.startsWith(`${TUTORIAL_COOKIE}=`))
+      ?.slice(TUTORIAL_COOKIE.length + 1)
+    if (!raw) return {}
+    const parsed = JSON.parse(decodeURIComponent(raw)) as Record<string, unknown>
+    const choices: TutorialChoices = {}
+    for (const id of TUTORIAL_IDS) {
+      const entry = parsed[id] as Partial<TutorialChoice> | undefined
+      if (entry && (entry.outcome === 'done' || entry.outcome === 'skipped') && typeof entry.at === 'string')
+        choices[id] = { outcome: entry.outcome, at: entry.at }
+    }
+    return choices
   } catch {
-    // Storage blocked: showing it every time beats never showing it.
+    return {}
+  }
+}
+
+function writeTutorialCookie(choices: TutorialChoices) {
+  try {
+    const secure = window.location.protocol === 'https:' ? '; Secure' : ''
+    document.cookie = `${TUTORIAL_COOKIE}=${encodeURIComponent(JSON.stringify(choices))}; Max-Age=${TUTORIAL_COOKIE_MAX_AGE}; Path=/; SameSite=Lax${secure}`
+  } catch {
+    // Cookies blocked: the localStorage key and the account still remember.
+  }
+}
+
+function legacyTutorialSeen(id: TutorialId) {
+  const key = LEGACY_TUTORIAL_KEYS[id]
+  if (!key) return false
+  try {
+    return localStorage.getItem(key) !== null
+  } catch {
     return false
   }
 }
 
-export function markAccessGuideSeen() {
-  try {
-    localStorage.setItem(ACCESS_GUIDE_KEY, new Date().toISOString())
-  } catch {
-    // Nothing to do — the guide simply shows again next visit.
+function accountTutorialChoices(): TutorialChoices {
+  if (!isAuthenticated()) return {}
+  const settings = getCurrentUserDatabase().settings
+  const choices: TutorialChoices = { ...settings.tutorials }
+  // An account that finished the tour before choices were recorded.
+  if (!choices['app-tour'] && settings.tutorialCompletedAt)
+    choices['app-tour'] = { outcome: 'done', at: settings.tutorialCompletedAt }
+  return choices
+}
+
+/** How a tutorial ended on this browser or for this account, if it has. */
+export function tutorialChoice(id: TutorialId): TutorialChoice | null {
+  const choice = accountTutorialChoices()[id] ?? readTutorialCookie()[id]
+  if (choice) return choice
+  return legacyTutorialSeen(id) ? { outcome: 'done', at: '' } : null
+}
+
+/** Remember that a tutorial was finished or skipped — in the cookie and, when signed in, on the account. */
+export function recordTutorial(id: TutorialId, outcome: TutorialChoice['outcome']) {
+  const choice: TutorialChoice = { outcome, at: new Date().toISOString() }
+  writeTutorialCookie({ ...readTutorialCookie(), [id]: choice })
+  const legacy = LEGACY_TUTORIAL_KEYS[id]
+  if (legacy) {
+    try {
+      localStorage.setItem(legacy, choice.at)
+    } catch {
+      // The cookie and the account cover it.
+    }
+  }
+  if (isAuthenticated()) {
+    const settings = getCurrentUserDatabase().settings
+    updateSettings({
+      tutorials: { ...settings.tutorials, [id]: choice },
+      ...(id === 'app-tour' ? { tutorialCompletedAt: choice.at } : {}),
+    })
   }
 }
 
-/** The "How to access Synonance" video: compulsory on first visit, skippable. Per browser. */
-const ACCESS_VIDEO_KEY = 'synonance:access-video-seen:v1'
+/** Forget a tutorial's choice everywhere, so it shows again. */
+export function forgetTutorial(id: TutorialId) {
+  const cookie = readTutorialCookie()
+  delete cookie[id]
+  writeTutorialCookie(cookie)
+  const legacy = LEGACY_TUTORIAL_KEYS[id]
+  if (legacy) {
+    try {
+      localStorage.removeItem(legacy)
+    } catch {
+      // Nothing stored, nothing to forget.
+    }
+  }
+  if (isAuthenticated()) {
+    const tutorials = { ...getCurrentUserDatabase().settings.tutorials }
+    delete tutorials[id]
+    updateSettings({ tutorials, ...(id === 'app-tour' ? { tutorialCompletedAt: undefined } : {}) })
+  }
+}
+
+/** Merge browser and account choices both ways. Runs at sign-in. */
+function syncTutorialChoices() {
+  if (!isAuthenticated()) return
+  const browser = readTutorialCookie()
+  for (const id of TUTORIAL_IDS)
+    if (!browser[id] && legacyTutorialSeen(id)) browser[id] = { outcome: 'done', at: new Date().toISOString() }
+  const account = accountTutorialChoices()
+  const merged: TutorialChoices = { ...browser, ...account }
+  writeTutorialCookie(merged)
+  if (TUTORIAL_IDS.some((id) => merged[id] && !account[id])) {
+    const settings = getCurrentUserDatabase().settings
+    updateSettings({
+      tutorials: { ...settings.tutorials, ...merged },
+      ...(merged['app-tour'] && !settings.tutorialCompletedAt ? { tutorialCompletedAt: merged['app-tour'].at } : {}),
+    })
+  }
+}
+
+export function hasSeenAccessGuide(): boolean {
+  return tutorialChoice('access-guide') !== null
+}
+
+export function markAccessGuideSeen(outcome: TutorialChoice['outcome'] = 'done') {
+  recordTutorial('access-guide', outcome)
+}
 
 export function hasSeenAccessVideo(): boolean {
-  try {
-    return localStorage.getItem(ACCESS_VIDEO_KEY) !== null
-  } catch {
-    return false
-  }
+  return tutorialChoice('access-video') !== null
 }
 
-export function markAccessVideoSeen() {
-  try {
-    localStorage.setItem(ACCESS_VIDEO_KEY, new Date().toISOString())
-  } catch {
-    // Shown again next visit; harmless.
-  }
+export function markAccessVideoSeen(outcome: TutorialChoice['outcome'] = 'done') {
+  recordTutorial('access-video', outcome)
 }
 
 /** Whether the signed-in account still owes the first-run app tour. */
 export function needsAppTour(): boolean {
-  return !getCurrentUserDatabase().settings.tutorialCompletedAt
+  return tutorialChoice('app-tour') === null
 }
 
-export function completeAppTour() {
-  updateSettings({ tutorialCompletedAt: new Date().toISOString() })
+export function completeAppTour(outcome: TutorialChoice['outcome'] = 'done') {
+  recordTutorial('app-tour', outcome)
 }
 
-/** Profile → "Replay the tour": clearing the flag brings the tour straight back. */
+/** Profile → "Replay the tour": forgetting the choice brings the tour straight back. */
 export function resetAppTour() {
-  updateSettings({ tutorialCompletedAt: undefined })
+  forgetTutorial('app-tour')
 }
 
 /**

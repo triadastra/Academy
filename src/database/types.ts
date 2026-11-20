@@ -330,6 +330,20 @@ export interface DatabaseSettings {
    * seen" without a schema bump.
    */
   tutorialCompletedAt?: string
+  /**
+   * How each tutorial ended for this account — finished or skipped — so a
+   * choice made on one browser holds on the next. Mirrored in the
+   * `synonance_tutorials` cookie; see the tutorial section of client.ts.
+   */
+  tutorials?: Partial<Record<TutorialId, TutorialChoice>>
+}
+
+export type TutorialId = 'access-video' | 'access-guide' | 'app-tour'
+
+export interface TutorialChoice {
+  outcome: 'done' | 'skipped'
+  /** ISO instant. */
+  at: string
 }
 
 export interface UserProfile {

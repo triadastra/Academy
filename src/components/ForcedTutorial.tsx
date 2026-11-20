@@ -1,16 +1,17 @@
 // ForcedTutorial.tsx — the one stepper both first-run tutorials use.
 //
-// "Forced" means exactly this: there is no close button, Escape and clicks on
-// the backdrop do nothing, and the only way out is the last step's button. The
-// visitor can go back and forth at their own pace, but they cannot reach the
-// page behind it without having been shown every step once.
+// Escape and clicks on the backdrop do nothing, so it cannot be dismissed by
+// accident. The ways out are the last step's button and, when the caller passes
+// `onSkip`, an explicit "Skip tutorial" button on every step. Either ending is
+// remembered by the caller (recordTutorial in client.ts), in a browser cookie
+// and on the account, so it does not come back.
 //
 // A step may name a `target` — the `data-tour` key of something on the page
 // (the course rail marks its nav items this way). When that element is on
 // screen it is ringed, so "Chat lives here" points at the real Chat link
 // rather than describing where it might be.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowLeft, ArrowRight, Check } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, SkipForward } from 'lucide-react'
 import Crest from '@/components/Crest'
 
 export interface TutorialStep {
@@ -45,12 +46,15 @@ export default function ForcedTutorial({
   steps,
   finishLabel,
   onFinish,
+  onSkip,
 }: {
   /** Accessible name for the dialog. */
   label: string
   steps: TutorialStep[]
   finishLabel: string
   onFinish: () => void
+  /** Shows "Skip tutorial" on every step. */
+  onSkip?: () => void
 }) {
   const [index, setIndex] = useState(0)
   const step = steps[index]
@@ -150,9 +154,21 @@ export default function ForcedTutorial({
                 {step.eyebrow ?? `Step ${index + 1} of ${steps.length}`}
               </span>
             </div>
-            <span className="font-mono text-[10px] text-ink-muted">
-              {String(index + 1).padStart(2, '0')} / {String(steps.length).padStart(2, '0')}
-            </span>
+            <div className="flex items-center gap-3">
+              <span className="font-mono text-[10px] text-ink-muted">
+                {String(index + 1).padStart(2, '0')} / {String(steps.length).padStart(2, '0')}
+              </span>
+              {onSkip && !last ? (
+                <button
+                  type="button"
+                  onClick={onSkip}
+                  className="flex items-center gap-1 rounded-control px-2 py-1 text-[12px] text-ink-muted hover:bg-paper hover:text-ink transition-colors duration-[120ms] ease-out"
+                >
+                  <SkipForward size={13} />
+                  Skip tutorial
+                </button>
+              ) : null}
+            </div>
           </div>
 
           <div className="mt-5 flex items-start gap-3.5">
